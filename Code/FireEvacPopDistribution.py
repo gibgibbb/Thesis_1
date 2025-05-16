@@ -62,7 +62,7 @@ FIRE_START = (50, 50)
 if grid[FIRE_START] != BUILDING:
     grid[FIRE_START] = FIRE
 
-# Populate with people, avoiding buildings and fire
+# Populate with people avoiding buildings and fire
 person_positions = []
 while len(person_positions) < 100:
     pos = np.random.randint(0, GRID_SIZE, size=2)
@@ -71,7 +71,7 @@ while len(person_positions) < 100:
         person_positions.append(tuple(pos))
 
 # Simulation parameters
-P_BURN = 0.2
+P_BURN = 0.2 #(.58) ang normal ako gi pa ubos
 MOVE_PROB = 0.8
 
 # Precompute distance to nearest exit
