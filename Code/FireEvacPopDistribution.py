@@ -20,7 +20,8 @@ df = df[(df['XCoord'] >= MIN_X) & (df['XCoord'] <= MAX_X) &
         (df['YCoord'] >= MIN_Y) & (df['YCoord'] <= MAX_Y)]
 
 # Step 5: Map coordinates to grid cells
-def coords_to_grid(x, y, min_x, max_x, min_y, max_y, grid_size):
+def coords_to_grid(x, y, min_x, max_x, min_y, max_y, grid_size):  
+    
     # Convert feet to meters and map to grid
     x_meters = x * 0.3048
     y_meters = y * 0.3048
@@ -52,7 +53,7 @@ for pos in building_positions:
     grid[pos] = BUILDING
 
 # Set exits 
-EXIT_POINTS = [(0, 0), (0, 50), (0, 99), (99, 50)]
+EXIT_POINTS = [(0, 0), (0, 50), (0, 99), (99, 50), (99, 0), (99, 99), (50, 0), (50, 99)]
 for exit_pos in EXIT_POINTS:
     if grid[exit_pos] != BUILDING:
         grid[exit_pos] = EXIT
