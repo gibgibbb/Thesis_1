@@ -1,6 +1,6 @@
-.exe
-.csv
-.png
-.pdf
-./OperatingSystem
-./Notes
+*.exe
+*.csv
+*.png
+*.pdf
+*./OperatingSystem
+*./Notes
