@@ -13,7 +13,7 @@ GRID_SIZE = 100  # 100x100 grid
 CELL_SIZE = 10  # 10m per cell
 
 # Step 3: Load the dataset
-df = pd.read_csv('./BuildingLayout/QN.csv') 
+df = pd.read_csv('./BuildingLayout/MN.csv') 
 
 # Step 4: Filter buildings within the area
 df = df[(df['XCoord'] >= MIN_X) & (df['XCoord'] <= MAX_X) &
