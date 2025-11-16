@@ -5,3 +5,4 @@
 *./OperatingSystem
 *./Notes
 *.ipynb_checkpoints/
+*.json
