@@ -1,0 +1,33 @@
+environment:
+  raster_dir: "processedData/raster/raster"
+  slope_file: "stack_slope_final.tif"
+  proximity_file: "stack_proximity.tif"
+  buildings_file: "stack_buildings.tif"
+  nodata_value: -9999
+
+simulation:
+  max_timesteps: 300
+  seed: 42
+  ignition_points: []          # list of [row, col] pairs; empty = random
+  early_stop: true             # stop when no IGNITED or BLAZING cells remain
+
+wind:
+  speed_kmh: 10.0              # placeholder static global
+  direction_deg: 315.0         # compass degrees (315 = NW)
+
+placeholder_transition:
+  base_ignition_prob: 0.12
+  slope_weight: 0.35
+  building_weight: 0.25
+  proximity_weight: 0.20
+  wind_weight: 0.20
+  burnout_prob: 0.04
+
+ml_model:
+  enabled: false
+  model_path: ""               # path to .pkl or .joblib when ready
+
+output:
+  output_dir: "output"
+  save_every_n_steps: 10
+  save_final_state: true
