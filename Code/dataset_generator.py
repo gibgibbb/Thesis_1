@@ -1,160 +1,146 @@
+"""Generate synthetic ML training rows by running CA dynamics on a cropped raster ROI."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
-from scipy.special import expit 
-import os
+import yaml
+from scipy.ndimage import convolve
 
-OUT = "revised_dataset.csv"
-np.random.seed(42)
+from modules.automata_engine import (
+    FireAutomata,
+    STATE_BLAZING,
+    STATE_IGNITED,
+    STATE_NOT_YET_BURNING,
+)
+from modules.data_loader import EnvironmentManager
+from modules.feature_pipeline import FeatureAssembler
 
-# Grid size (adjust)
-nx, ny = 50, 40   # 2000 cells
-N = nx * ny
 
-# Create smooth spatial fields by cumulative sum smoothing (simple)
-base_noise = np.random.randn(ny, nx)
-smooth = np.cumsum(np.cumsum(base_noise, axis=0), axis=1)
-smooth = (smooth - smooth.min()) / (smooth.max() - smooth.min())
+class SyntheticDatasetGenerator:
+    def __init__(self, config: dict):
+        self.config = config
+        self.base_dir = Path(__file__).resolve().parent
+        self.dataset_cfg = config["dataset_generation"]
+        self.roi = self.dataset_cfg["roi"]
+        self.n_ignition_points = int(self.dataset_cfg["n_ignition_points"])
+        self.timesteps_to_record = int(self.dataset_cfg["timesteps_to_record"])
+        self.output_csv = self.dataset_cfg["output_csv"]
 
-# Coordinates
-xs, ys = np.meshgrid(np.arange(nx), np.arange(ny))
-xs = xs.astype(float); ys = ys.astype(float)
+        environment_cfg = dict(config["environment"])
+        raster_dir = Path(environment_cfg["raster_dir"])
+        if not raster_dir.is_absolute():
+            environment_cfg["raster_dir"] = str((self.base_dir / raster_dir).resolve())
 
-# Building presence probability varies with smooth field
-building_prob = 0.2 + 0.5 * smooth  # more buildings where smooth is high
-building_presence = (np.random.rand(ny, nx) < building_prob).astype(int)
+        self.environment_manager = EnvironmentManager(environment_cfg)
+        self.feature_assembler: FeatureAssembler | None = None
+        self.rng = np.random.default_rng(int(config["simulation"].get("seed", 42)))
 
-# Building material (wood more likely where building_density high)
-material_choices = ['wood', 'concrete']
-material = np.full((ny,nx), "concrete", dtype=object)
-for i in range(ny):
-    for j in range(nx):
-        if building_presence[i,j]==1:
-            # Higher probability for concrete (0.7) than wood (0.3 * smooth)
-            p_wood = 0.3 * smooth[i,j]
-            p_concrete = 0.7
-            p = [p_wood, p_concrete]
-            p = np.array(p); p = p / p.sum()  # Normalize to sum to 1
-            material[i,j] = np.random.choice(material_choices, p=p)
+    def _crop_environment(self, env: dict, roi: dict) -> dict:
+        row_start = int(roi["row_start"])
+        row_end = int(roi["row_end"])
+        col_start = int(roi["col_start"])
+        col_end = int(roi["col_end"])
+
+        row_slice = slice(row_start, row_end)
+        col_slice = slice(col_start, col_end)
+
+        cropped = {
+            "slope_risk": env["slope_risk"][row_slice, col_slice],
+            "proximity_risk": env["proximity_risk"][row_slice, col_slice],
+            "building_presence": env["building_presence"][row_slice, col_slice],
+            "burnable_mask": env["burnable_mask"][row_slice, col_slice],
+            "nodata_mask": env["nodata_mask"][row_slice, col_slice],
+            "transform": env["transform"],
+            "crs": env["crs"],
+        }
+        cropped["grid_shape"] = cropped["slope_risk"].shape
+        return cropped
+
+    def _choose_ignition_points(self, environment: dict) -> list[tuple[int, int]]:
+        eligible_mask = environment["burnable_mask"] & (environment["building_presence"] > 0)
+        eligible_indices = np.flatnonzero(eligible_mask.ravel())
+
+        if eligible_indices.size < self.n_ignition_points:
+            raise ValueError(
+                "Not enough burnable building cells in ROI for ignition points: "
+                f"requested {self.n_ignition_points}, available {eligible_indices.size}"
+            )
+
+        chosen = self.rng.choice(eligible_indices, size=self.n_ignition_points, replace=False)
+        rows, cols = np.unravel_index(chosen, environment["grid_shape"])
+        return [(int(r), int(c)) for r, c in zip(rows, cols)]
+
+    def generate(self) -> str:
+        self.environment_manager.load_rasters()
+        self.environment_manager.build_masks()
+        self.environment_manager.normalize_layers()
+
+        full_environment = self.environment_manager.get_environment()
+        cropped_environment = self._crop_environment(full_environment, self.roi)
+
+        self.feature_assembler = FeatureAssembler(cropped_environment, self.config["wind"])
+        automata = FireAutomata(cropped_environment, self.config)
+        automata.set_ignition(self._choose_ignition_points(cropped_environment))
+
+        kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.int8)
+        recorded_blocks: list[np.ndarray] = []
+
+        for _ in range(self.timesteps_to_record):
+            grid_before = automata.get_grid()
+
+            blazing_neighbor_count = convolve(
+                (grid_before == STATE_BLAZING).astype(np.int8),
+                kernel,
+                mode="constant",
+                cval=0,
+            )
+            grid_features = self.feature_assembler.assemble_grid_features(blazing_neighbor_count)
+
+            candidate_mask = (grid_before == STATE_NOT_YET_BURNING).ravel()
+            automata.step()
+            grid_after = automata.get_grid()
+
+            ignited_now = (
+                (grid_before == STATE_NOT_YET_BURNING) & (grid_after == STATE_IGNITED)
+            ).ravel()
+
+            if np.any(candidate_mask):
+                features_candidates = grid_features[candidate_mask]
+                labels_candidates = ignited_now[candidate_mask].astype(np.float32)
+                block = np.column_stack([features_candidates, labels_candidates]).astype(np.float32)
+                recorded_blocks.append(block)
+
+        if recorded_blocks:
+            dataset = np.vstack(recorded_blocks).astype(np.float32)
         else:
-            material[i,j] = 'none'
+            dataset = np.empty((0, len(FeatureAssembler.FEATURE_NAMES) + 1), dtype=np.float32)
 
-# Building height correlated with building presence and smoothness
-height = (5 + 40 * smooth) * building_presence + np.random.rand(ny,nx) * 3
+        columns = FeatureAssembler.FEATURE_NAMES + ["Ignited"]
+        dataframe = pd.DataFrame(dataset, columns=columns)
 
-# Fuel load correlated with vegetation cover (complement of building presence) and smooth
-vegetation = (1 - building_presence) * (0.3 + 0.7 * (1 - smooth))  # more veg where smooth low
-fuel_load = np.clip(vegetation + 0.1 * np.random.rand(ny,nx), 0, 1)
+        output_path = Path(self.output_csv)
+        if not output_path.is_absolute():
+            output_path = self.base_dir / output_path
+        output_path.parent.mkdir(parents=True, exist_ok=True)
 
-# Wind: global constant for simplicity, but direction matters for neighbor alignment
-wind_speed = 8.0  # m/s
-wind_dir_deg = 45.0  # NE
-wind_rad = np.deg2rad(wind_dir_deg)
+        dataframe.to_csv(output_path, index=False)
 
-# Temperature and humidity — add spatial gradient
-temperature = 25 + 10 * (1 - smooth) + np.random.randn(ny,nx) * 1.5
-humidity = 40 + 30 * smooth + np.random.randn(ny,nx) * 5
-humidity = np.clip(humidity, 0, 100)
+        row_count = len(dataframe)
+        ignited_fraction = float(dataframe["Ignited"].mean()) if row_count > 0 else 0.0
+        print(f"Saved synthetic dataset: {output_path}")
+        print(f"Rows recorded: {row_count}")
+        print(f"Ignited=1 percentage: {ignited_fraction * 100.0:.2f}%")
 
-# Slope: derived from smooth gradients approximated by gradients of smooth map
-gy, gx = np.gradient(smooth)
-slope = np.sqrt(gx**2 + gy**2) * 30  # scale to degrees approximately
+        return str(output_path)
 
-# Material flammability map (only wood and concrete now)
-mat_score_map = {'wood':0.95, 'concrete':0.2, 'none':0.05}
 
-# Composite flammability
-material_score = np.vectorize(lambda m: mat_score_map.get(m, 0.5))(material)
-fuel_moisture = (humidity / 100.0) * (1 - (temperature - temperature.min()) / (temperature.max()-temperature.min()))
-fuel_moisture = np.clip(fuel_moisture, 0, 1)
-composite_flammability = material_score * fuel_load * (1 - fuel_moisture)
+if __name__ == "__main__":
+    config_path = Path(__file__).resolve().parent / "config" / "default_experiment.yaml"
+    with config_path.open("r", encoding="utf-8") as file:
+        config = yaml.safe_load(file)
 
-# CA-style simulation to generate labels:
-timesteps = 5
-state = np.zeros((ny,nx), dtype=int)  # 0=unburned,1=burning,2=burned
-# seed a few ignition points proportional to high flammability
-seed_prob = (composite_flammability.flatten() - composite_flammability.min())
-seed_prob = seed_prob / (seed_prob.max() + 1e-9)
-seed_idx = np.random.choice(range(N), size=10, replace=False, p=seed_prob/seed_prob.sum())
-for idx in seed_idx:
-    i = idx // nx; j = idx % nx
-    state[i,j] = 1  # burning
-
-# neighbors offsets (8-neighborhood)
-neigh = [(-1,-1),(-1,0),(-1,1),(0,-1),(0,1),(1,-1),(1,0),(1,1)]
-
-# logistic weights (tunable)
-w_flamm = 3.0
-w_neigh = 1.5
-w_wind = 1.0
-w_slope = 0.8
-bias = -3.0  # keep base P low (rare ignition)
-
-# create arrays to store per-cell record for a random timestep snapshot (we'll store features at t and label whether they ignite at t+1)
-records = []
-
-for t in range(timesteps):
-    # compute ignition probability for unburned cells (0)
-    prob = np.zeros_like(composite_flammability)
-    for i in range(ny):
-        for j in range(nx):
-            if state[i,j] != 0:
-                prob[i,j] = 0.0
-                continue
-            # neighbor influence: count burning neighbors and compute weighted alignment with wind
-            nb_burning = 0
-            wind_align_sum = 0.0
-            for di,dj in neigh:
-                ni = i+di; nj = j+dj
-                if 0 <= ni < ny and 0 <= nj < nx:
-                    if state[ni,nj] == 1:
-                        nb_burning += 1
-                        # vector from neighbor to this cell
-                        vec_x = j - nj
-                        vec_y = i - ni
-                        # normalize
-                        norm = np.hypot(vec_x, vec_y) if (vec_x or vec_y) else 1.0
-                        vec_x /= norm; vec_y /= norm
-                        # wind unit vector
-                        wx = np.cos(wind_rad); wy = np.sin(wind_rad)
-                        wind_align_sum += (vec_x*wx + vec_y*wy)  # cosine
-            wind_align = wind_align_sum / (nb_burning+1e-6)
-
-            flamm = composite_flammability[i,j]
-            slope_comp = slope[i,j]  # rough proxy; you can make directional later
-
-            linear = (w_flamm * flamm) + (w_neigh * nb_burning) + (w_wind * wind_align * (np.linalg.norm([wind_speed,0]))) + (w_slope * slope_comp/30.0) + bias
-            p = expit(linear)  # logistic
-            prob[i,j] = p
-
-    # apply stochastic ignition: burning cells at next step
-    new_burning = (np.random.rand(ny,nx) < prob).astype(int)
-    # save records for all cells at this timestep (features at t and whether ignite at t+1)
-    for i in range(ny):
-        for j in range(nx):
-            rec = {
-                'x': j,
-                'y': i,
-                'Building_Presence': int(building_presence[i,j]),
-                'Building_Material': material[i,j],
-                'Building_Height': float(height[i,j]),
-                'Fuel_Load': float(fuel_load[i,j]),
-                'Wind_Speed': float(wind_speed),
-                'Wind_Direction': float(wind_dir_deg),
-                'Temperature': float(temperature[i,j]),
-                'Humidity': float(humidity[i,j]),
-                'Slope': float(slope[i,j]),
-                'Neighbor_Burning': int(sum(1 for di,dj in neigh if 0<=i+di<ny and 0<=j+dj<nx and state[i+di,j+dj]==1)),
-                'Ignited': int(new_burning[i,j]),
-                'composite_flamm': float(composite_flammability[i,j]),
-                'fuel_moisture': float(fuel_moisture[i,j])
-            }
-            records.append(rec)
-
-    # update states: burning -> burned, new_burning -> burning
-    state = np.where(state==1, 2, state)
-    state = np.where(new_burning==1, 1, state)
-
-# assemble dataframe and save
-df = pd.DataFrame(records)
-df.to_csv(OUT, index=False)
-print("Generated realistic synthetic dataset saved to:", OUT)
+    generator = SyntheticDatasetGenerator(config)
+    generator.generate()

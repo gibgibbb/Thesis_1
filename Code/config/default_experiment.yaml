@@ -31,3 +31,13 @@ output:
   output_dir: "output"
   save_every_n_steps: 10
   save_final_state: true
+
+dataset_generation:
+  roi:
+    row_start: 1800
+    row_end: 2600
+    col_start: 2400
+    col_end: 3200
+  n_ignition_points: 5
+  timesteps_to_record: 40
+  output_csv: "dataFiles/synthetic_fire_dataset.csv"
