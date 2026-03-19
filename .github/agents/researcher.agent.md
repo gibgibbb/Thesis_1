@@ -1,7 +1,7 @@
 ---
 name: Researcher
 description: Reviews thesis methodology, validates equations and modeling assumptions, writes documentation
-model: GPT-5.3-Codex
+model: Gemini 2.5 Pro (copilot)
 tools: ['read/readFile', 'search', 'vscode/memory', 'web']
 ---
 

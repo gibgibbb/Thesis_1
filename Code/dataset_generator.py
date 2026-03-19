@@ -28,6 +28,7 @@ class SyntheticDatasetGenerator:
         self.n_ignition_points = int(self.dataset_cfg["n_ignition_points"])
         self.timesteps_to_record = int(self.dataset_cfg["timesteps_to_record"])
         self.output_csv = self.dataset_cfg["output_csv"]
+        self.flammability_weights = config.get("flammability_weights", {})
 
         environment_cfg = dict(config["environment"])
         raster_dir = Path(environment_cfg["raster_dir"])
@@ -81,7 +82,11 @@ class SyntheticDatasetGenerator:
         full_environment = self.environment_manager.get_environment()
         cropped_environment = self._crop_environment(full_environment, self.roi)
 
-        self.feature_assembler = FeatureAssembler(cropped_environment, self.config["wind"])
+        self.feature_assembler = FeatureAssembler(
+            cropped_environment,
+            self.config["wind"],
+            self.flammability_weights,
+        )
         automata = FireAutomata(cropped_environment, self.config)
         automata.set_ignition(self._choose_ignition_points(cropped_environment))
 

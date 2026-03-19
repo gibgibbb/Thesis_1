@@ -4,6 +4,8 @@ import joblib
 import numpy as np
 from scipy.ndimage import convolve
 
+from .feature_pipeline import FeatureAssembler
+
 
 STATE_NON_BURNABLE = np.int8(1)
 STATE_NOT_YET_BURNING = np.int8(2)
@@ -30,6 +32,7 @@ class FireAutomata:
 		self.wind_cfg = config.get("wind", {})
 		self.transition_cfg = config.get("placeholder_transition", {})
 		self.ml_cfg = config.get("ml_model", {})
+		self.flammability_weights = config.get("flammability_weights", {})
 
 		self.grid = np.full(self.grid_shape, STATE_NOT_YET_BURNING, dtype=np.int8)
 		self.grid[~self.burnable_mask] = STATE_NON_BURNABLE
@@ -40,6 +43,11 @@ class FireAutomata:
 		self.timestep = 0
 
 		self._precompute_base_probability()
+		self.feature_assembler = FeatureAssembler(
+			environment,
+			self.wind_cfg,
+			self.flammability_weights,
+		)
 
 	def _precompute_base_probability(self) -> None:
 		base_ignition_prob = np.float32(self.transition_cfg.get("base_ignition_prob", 0.0))
@@ -117,8 +125,19 @@ class FireAutomata:
 		self._ml_enabled = True
 
 	def _predict_with_model(self) -> np.ndarray:
-		"""Assembles per-cell feature vectors and calls self.model.predict_proba(). To be implemented when feature_pipeline.py is ready."""
-		raise NotImplementedError("ML feature assembly not yet implemented")
+		kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.int8)
+		blazing_neighbor_count = convolve(
+			(self.grid == STATE_BLAZING).astype(np.int8),
+			kernel,
+			mode="constant",
+			cval=0,
+		)
+
+		features = self.feature_assembler.assemble_grid_features(blazing_neighbor_count)
+		proba = self.model.predict_proba(features)
+		ignition_proba_flat = proba[:, 1]
+		ignition_proba_grid = ignition_proba_flat.reshape(self.grid_shape).astype(np.float32)
+		return ignition_proba_grid
 
 	def is_active(self) -> bool:
 		return bool(np.any((self.grid == STATE_IGNITED) | (self.grid == STATE_BLAZING)))

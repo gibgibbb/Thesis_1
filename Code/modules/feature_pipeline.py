@@ -17,12 +17,17 @@ class FeatureAssembler:
 		"composite_flammability",
 	]
 
-	def __init__(self, environment: dict, wind_config: dict):
-		self.slope_risk = environment["slope_risk"]
-		self.proximity_risk = environment["proximity_risk"]
-		self.building_presence = environment["building_presence"]
+	def __init__(self, environment: dict, wind_config: dict, flammability_weights: dict | None = None):
+		self.slope_risk = np.asarray(environment["slope_risk"], dtype=np.float32)
+		self.proximity_risk = np.asarray(environment["proximity_risk"], dtype=np.float32)
+		self.building_presence = np.asarray(environment["building_presence"], dtype=np.float32)
 		self.burnable_mask = environment["burnable_mask"]
 		self.grid_shape = environment["grid_shape"]
+
+		weights = flammability_weights or {}
+		base_weight = np.float32(weights.get("base_weight", 0.5))
+		slope_weight = np.float32(weights.get("slope_weight", 0.3))
+		proximity_weight = np.float32(weights.get("proximity_weight", 0.2))
 
 		direction_deg = float(wind_config["direction_deg"])
 		radians = np.deg2rad(direction_deg)
@@ -34,6 +39,12 @@ class FeatureAssembler:
 		self.wind_sin = float(np.sin(radians))
 		self.wind_cos = float(np.cos(radians))
 
+		# Precompute once to avoid repeated per-timestep arithmetic.
+		self.composite_flammability = (
+			self.building_presence
+			* (base_weight + slope_weight * self.slope_risk + proximity_weight * self.proximity_risk)
+		).astype(np.float32)
+
 		self.feature_names = list(self.FEATURE_NAMES)
 
 	def assemble_grid_features(self, blazing_neighbor_count: np.ndarray) -> np.ndarray:
@@ -43,11 +54,7 @@ class FeatureAssembler:
 				f"{blazing_neighbor_count.shape} != {self.grid_shape}"
 			)
 
-		composite_flammability = self.building_presence * (
-			np.float32(0.5)
-			+ np.float32(0.3) * self.slope_risk
-			+ np.float32(0.2) * self.proximity_risk
-		)
+		blazing_neighbor_count = np.asarray(blazing_neighbor_count, dtype=np.float32)
 
 		n_cells = int(np.prod(self.grid_shape))
 		wind_speed_col = np.full(n_cells, self.wind_speed, dtype=np.float32)
@@ -63,7 +70,7 @@ class FeatureAssembler:
 				wind_sin_col,
 				wind_cos_col,
 				blazing_neighbor_count.ravel(),
-				composite_flammability.ravel(),
+				self.composite_flammability.ravel(),
 			]
 		).astype(np.float32)
 

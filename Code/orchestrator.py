@@ -4,8 +4,20 @@ import numpy as np
 import rasterio
 import yaml
 
-from modules.automata_engine import FireAutomata
-from modules.data_loader import EnvironmentManager
+try:
+	from modules.automata_engine import FireAutomata
+	from modules.data_loader import EnvironmentManager
+except ModuleNotFoundError:
+	from Code.modules.automata_engine import FireAutomata
+	from Code.modules.data_loader import EnvironmentManager
+
+
+DEFAULT_FLAMMABILITY_WEIGHTS = {
+	"base_weight": 0.5,
+	"slope_weight": 0.3,
+	"proximity_weight": 0.2,
+}
+SUPPORTED_MODEL_EXTENSIONS = {".pkl", ".joblib"}
 
 
 def load_config(config_path: str) -> dict:
@@ -17,6 +29,32 @@ def load_config(config_path: str) -> dict:
 	raster_dir = config["environment"]["raster_dir"]
 	config["environment"]["raster_dir"] = str((code_dir / raster_dir).resolve())
 	return config
+
+
+def apply_pipeline_defaults(config: dict) -> dict:
+	normalized_config = dict(config)
+	weights_cfg = dict(normalized_config.get("flammability_weights", {}))
+	normalized_config["flammability_weights"] = {
+		**DEFAULT_FLAMMABILITY_WEIGHTS,
+		**weights_cfg,
+	}
+	return normalized_config
+
+
+def load_model(automata: FireAutomata, model_path: str) -> None:
+	model_file = Path(model_path)
+	if model_file.suffix.lower() not in SUPPORTED_MODEL_EXTENSIONS:
+		supported = ", ".join(sorted(SUPPORTED_MODEL_EXTENSIONS))
+		raise ValueError(f"Model file must have one of these extensions: {supported}")
+
+	if not model_file.is_absolute():
+		model_file = Path(__file__).resolve().parent / model_file
+
+	if not model_file.exists():
+		raise FileNotFoundError(f"Model file not found: {model_file}")
+
+	# FireAutomata.load_model validates that the loaded object exposes predict_proba().
+	automata.load_model(str(model_file))
 
 
 def _pick_random_ignition_points(automata: FireAutomata, n_points: int = 3) -> list[tuple[int, int]]:
@@ -32,17 +70,20 @@ def _pick_random_ignition_points(automata: FireAutomata, n_points: int = 3) -> l
 
 
 def run_simulation(config: dict) -> None:
+	config = apply_pipeline_defaults(config)
+
 	env_manager = EnvironmentManager(config["environment"])
 	env_manager.load_rasters()
 	env_manager.build_masks()
 	env_manager.normalize_layers()
 	env_manager.summary()
 
+	# FireAutomata passes flammability_weights into FeatureAssembler during setup.
 	automata = FireAutomata(env_manager.get_environment(), config)
 
 	ml_cfg = config.get("ml_model", {})
 	if ml_cfg.get("enabled") is True and str(ml_cfg.get("model_path", "")).strip() != "":
-		automata.load_model(ml_cfg["model_path"])
+		load_model(automata, ml_cfg["model_path"])
 
 	ignition_points = config["simulation"].get("ignition_points", [])
 	if ignition_points:

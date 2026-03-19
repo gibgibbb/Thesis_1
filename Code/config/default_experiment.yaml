@@ -15,6 +15,11 @@ wind:
   speed_kmh: 10.0              # placeholder static global
   direction_deg: 315.0         # compass degrees (315 = NW)
 
+flammability_weights:
+  base_weight: 0.5
+  slope_weight: 0.3
+  proximity_weight: 0.2
+
 placeholder_transition:
   base_ignition_prob: 0.12
   slope_weight: 0.35
@@ -22,14 +27,10 @@ placeholder_transition:
   proximity_weight: 0.20
   wind_weight: 0.20
   burnout_prob: 0.04
-  material_score:
-    concrete: 0.2
-    mixed: 0.5
-    wood: 0.8
 
 ml_model:
-  enabled: false
-  model_path: ""               # path to .pkl or .joblib when ready
+  enabled: true
+  model_path: "models/fire_rf_model.joblib"               # path to .pkl or .joblib when ready
 
 output:
   output_dir: "output"
