@@ -1,5 +1,4 @@
 """Load and prepare aligned environmental rasters for fire spread simulation."""
-
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +13,7 @@ class EnvironmentManager:
         self.slope_file = config["slope_file"]
         self.proximity_file = config["proximity_file"]
         self.buildings_file = config["buildings_file"]
+        self.materials_file = config.get("materials_file", "stack_materials.tif")
         self.nodata_value = config.get("nodata_value", -9999)
 
         self.transform = None
@@ -23,6 +23,7 @@ class EnvironmentManager:
         self.slope_raw = None
         self.proximity_raw = None
         self.buildings_raw = None
+        self.materials_raw = None
 
         self.nodata_mask = None
         self.burnable_mask = None
@@ -30,12 +31,14 @@ class EnvironmentManager:
         self.slope_risk = None
         self.proximity_risk = None
         self.building_presence = None
+        self.material_risk = None
 
     def load_rasters(self) -> None:
         raster_specs = [
             ("slope", self.slope_file),
             ("proximity", self.proximity_file),
             ("buildings", self.buildings_file),
+            ("materials", self.materials_file),
         ]
 
         for index, (name, filename) in enumerate(raster_specs):
@@ -65,23 +68,32 @@ class EnvironmentManager:
                     self.slope_raw = arr
                 elif name == "proximity":
                     self.proximity_raw = arr
-                else:
+                elif name == "buildings":
                     self.buildings_raw = arr
+                else:
+                    self.materials_raw = arr
 
     def build_masks(self) -> None:
-        if self.slope_raw is None or self.proximity_raw is None or self.buildings_raw is None:
+        if (
+            self.slope_raw is None
+            or self.proximity_raw is None
+            or self.buildings_raw is None
+            or self.materials_raw is None
+        ):
             raise ValueError("Rasters are not loaded. Call load_rasters() first.")
 
         nodata_mask = (
             (self.slope_raw == self.nodata_value)
             | (self.proximity_raw == self.nodata_value)
             | (self.buildings_raw == self.nodata_value)
+            | (self.materials_raw == self.nodata_value)
             | (self.slope_raw == -9999)
         )
         ocean_mask = (
             (self.slope_raw == 0)
             & (self.proximity_raw == 0)
             & (self.buildings_raw == 0)
+            & (self.materials_raw == 0)
         )
 
         self.nodata_mask = nodata_mask | ocean_mask
@@ -101,11 +113,23 @@ class EnvironmentManager:
 
         self.building_presence = np.where(self.buildings_raw == 10, 1, 0).astype(np.int8)
 
+        material_scores = self.config.get("placeholder_transition", {}).get("material_scores", {})
+        concrete_score = float(material_scores.get("concrete_score", material_scores.get("concrete", 0.2)))
+        mixed_score = float(material_scores.get("mixed_score", material_scores.get("mixed", 0.5)))
+        wood_score = float(material_scores.get("wood_score", material_scores.get("wood", 0.9)))
+
+        self.material_risk = np.zeros_like(self.materials_raw, dtype=np.float32)
+        self.material_risk[self.materials_raw == 1] = concrete_score
+        self.material_risk[self.materials_raw == 2] = mixed_score
+        self.material_risk[self.materials_raw == 3] = wood_score
+        self.material_risk[self.nodata_mask] = 0
+
     def get_environment(self) -> dict[str, Any]:
         return {
             "slope_risk": self.slope_risk,
             "proximity_risk": self.proximity_risk,
             "building_presence": self.building_presence,
+            "material_risk": self.material_risk,
             "burnable_mask": self.burnable_mask,
             "nodata_mask": self.nodata_mask,
             "grid_shape": self.grid_shape,
@@ -114,7 +138,12 @@ class EnvironmentManager:
         }
 
     def summary(self) -> None:
-        if self.slope_risk is None or self.proximity_risk is None or self.building_presence is None:
+        if (
+            self.slope_risk is None
+            or self.proximity_risk is None
+            or self.building_presence is None
+            or self.material_risk is None
+        ):
             raise ValueError("Layers are not normalized. Call normalize_layers() first.")
 
         burnable_count = int(np.count_nonzero(self.burnable_mask))
@@ -124,6 +153,8 @@ class EnvironmentManager:
         slope_max = float(np.max(self.slope_risk))
         proximity_min = float(np.min(self.proximity_risk))
         proximity_max = float(np.max(self.proximity_risk))
+        material_min = float(np.min(self.material_risk))
+        material_max = float(np.max(self.material_risk))
 
         print(f"Grid shape: {self.grid_shape}")
         print(f"CRS: {self.crs}")
@@ -131,3 +162,4 @@ class EnvironmentManager:
         print(f"Building cells: {building_count}")
         print(f"Slope risk range: [{slope_min:.4f}, {slope_max:.4f}]")
         print(f"Proximity risk range: [{proximity_min:.4f}, {proximity_max:.4f}]")
+        print(f"Material risk range: [{material_min:.4f}, {material_max:.4f}]")

@@ -1,7 +1,7 @@
 ---
 name: Researcher
 description: Reviews thesis methodology, validates equations and modeling assumptions, writes documentation
-model: Claude Opus 4.6 (copilot)
+model: GPT-5.3-Codex
 tools: ['read/readFile', 'search', 'vscode/memory', 'web']
 ---
 

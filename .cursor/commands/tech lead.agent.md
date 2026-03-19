@@ -1,7 +1,7 @@
 ---
 name: Tech Lead
 description: Analyzes requirements, researches codebase, creates strict implementation plans, and defines scoped delegation prompts for the Coder and Researcher agents.
-model: Gemini 3.1 Pro (Preview) (copilot)
+model: Claude Opus 4.6 (copilot)
 tools: ['vscode', 'execute', 'read', 'agent', 'context7/*', 'github/*', 'edit', 'search', 'web', 'vscode/memory', 'todo']
 ---
 

@@ -22,6 +22,10 @@ placeholder_transition:
   proximity_weight: 0.20
   wind_weight: 0.20
   burnout_prob: 0.04
+  material_score:
+    concrete: 0.2
+    mixed: 0.5
+    wood: 0.8
 
 ml_model:
   enabled: false
