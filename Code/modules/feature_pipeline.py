@@ -10,6 +10,7 @@ class FeatureAssembler:
 		"slope_risk",
 		"proximity_risk",
 		"building_presence",
+		"material_risk",
 		"wind_speed",
 		"wind_sin",
 		"wind_cos",
@@ -21,13 +22,9 @@ class FeatureAssembler:
 		self.slope_risk = np.asarray(environment["slope_risk"], dtype=np.float32)
 		self.proximity_risk = np.asarray(environment["proximity_risk"], dtype=np.float32)
 		self.building_presence = np.asarray(environment["building_presence"], dtype=np.float32)
+		self.material_risk = np.asarray(environment["material_risk"], dtype=np.float32)
 		self.burnable_mask = environment["burnable_mask"]
 		self.grid_shape = environment["grid_shape"]
-
-		weights = flammability_weights or {}
-		base_weight = np.float32(weights.get("base_weight", 0.5))
-		slope_weight = np.float32(weights.get("slope_weight", 0.3))
-		proximity_weight = np.float32(weights.get("proximity_weight", 0.2))
 
 		direction_deg = float(wind_config["direction_deg"])
 		radians = np.deg2rad(direction_deg)
@@ -39,10 +36,8 @@ class FeatureAssembler:
 		self.wind_sin = float(np.sin(radians))
 		self.wind_cos = float(np.cos(radians))
 
-		# Precompute once to avoid repeated per-timestep arithmetic.
 		self.composite_flammability = (
-			self.building_presence
-			* (base_weight + slope_weight * self.slope_risk + proximity_weight * self.proximity_risk)
+			self.building_presence * self.material_risk
 		).astype(np.float32)
 
 		self.feature_names = list(self.FEATURE_NAMES)
@@ -66,6 +61,7 @@ class FeatureAssembler:
 				self.slope_risk.ravel(),
 				self.proximity_risk.ravel(),
 				self.building_presence.ravel(),
+				self.material_risk.ravel(),
 				wind_speed_col,
 				wind_sin_col,
 				wind_cos_col,

@@ -13,7 +13,6 @@ STATE_IGNITED = np.int8(3)
 STATE_BLAZING = np.int8(4)
 STATE_EXTINGUISHED = np.int8(5)
 
-
 class FireAutomata:
 	def __init__(self, environment: dict, config: dict):
 		self.environment = environment
@@ -22,6 +21,7 @@ class FireAutomata:
 		self.slope_risk = environment["slope_risk"]
 		self.proximity_risk = environment["proximity_risk"]
 		self.building_presence = environment["building_presence"]
+		self.material_risk = environment["material_risk"]
 		self.burnable_mask = environment["burnable_mask"]
 		self.nodata_mask = environment["nodata_mask"]
 		self.grid_shape = environment["grid_shape"]
@@ -36,6 +36,10 @@ class FireAutomata:
 
 		self.grid = np.full(self.grid_shape, STATE_NOT_YET_BURNING, dtype=np.int8)
 		self.grid[~self.burnable_mask] = STATE_NON_BURNABLE
+		self.ignition_timers = np.zeros(self.grid_shape, dtype=np.int16)
+		self.blazing_timers = np.zeros(self.grid_shape, dtype=np.int16)
+		self.t_3_to_4 = int(self.transition_cfg.get("T_3_to_4", 1))
+		self.t_4_to_5 = int(self.transition_cfg.get("T_4_to_5", 1))
 
 		self.rng = np.random.default_rng(self.simulation_cfg["seed"])
 		self.model = None
@@ -54,12 +58,14 @@ class FireAutomata:
 		slope_weight = np.float32(self.transition_cfg.get("slope_weight", 0.0))
 		building_weight = np.float32(self.transition_cfg.get("building_weight", 0.0))
 		proximity_weight = np.float32(self.transition_cfg.get("proximity_weight", 0.0))
+		material_weight = np.float32(self.transition_cfg.get("material_weight", 0.0))
 
 		self.p_base = np.clip(
 			base_ignition_prob
 			+ slope_weight * self.slope_risk
 			+ building_weight * self.building_presence
-			+ proximity_weight * self.proximity_risk,
+			+ proximity_weight * self.proximity_risk
+			+ material_weight * self.material_risk,
 			0.0,
 			1.0,
 		).astype(np.float32)
@@ -78,7 +84,6 @@ class FireAutomata:
 
 	def step(self) -> None:
 		kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.int8)
-		burnout_prob = float(self.transition_cfg.get("burnout_prob", 0.0))
 		wind_weight = float(self.transition_cfg.get("wind_weight", 0.0))
 		wind_multiplier = 1.0 + wind_weight
 
@@ -88,11 +93,17 @@ class FireAutomata:
 		ignited_now = current_grid == STATE_IGNITED
 		blazing_now = current_grid == STATE_BLAZING
 
-		next_grid[ignited_now] = STATE_BLAZING
+		self.ignition_timers[ignited_now] += np.int16(1)
+		self.blazing_timers[blazing_now] += np.int16(1)
 
-		if np.any(blazing_now):
-			burnout_draw = self.rng.random(self.grid_shape)
-			next_grid[blazing_now & (burnout_draw < burnout_prob)] = STATE_EXTINGUISHED
+		ignite_to_blazing = ignited_now & (self.ignition_timers >= self.t_3_to_4)
+		next_grid[ignite_to_blazing] = STATE_BLAZING
+		self.ignition_timers[ignite_to_blazing] = np.int16(0)
+		self.blazing_timers[ignite_to_blazing] = np.int16(0)
+
+		blazing_to_extinguished = blazing_now & (self.blazing_timers >= self.t_4_to_5)
+		next_grid[blazing_to_extinguished] = STATE_EXTINGUISHED
+		self.blazing_timers[blazing_to_extinguished] = np.int16(0)
 
 		blazing_neighbor_count = convolve(
 			blazing_now.astype(np.int8),
@@ -112,6 +123,8 @@ class FireAutomata:
 			ignition_draw = self.rng.random(self.grid_shape)
 			ignite_mask = susceptible & (ignition_draw < p_effective)
 			next_grid[ignite_mask] = STATE_IGNITED
+			self.ignition_timers[ignite_mask] = np.int16(0)
+			self.blazing_timers[ignite_mask] = np.int16(0)
 
 		self.grid = next_grid
 		self.timestep += 1
@@ -123,6 +136,67 @@ class FireAutomata:
 			raise TypeError("Loaded model must provide a callable predict_proba attribute")
 		self.model = loaded_model
 		self._ml_enabled = True
+
+	def save_checkpoint(self, filepath: str) -> None:
+		grid_to_save = self.grid.astype(np.int8, copy=False)
+		ignition_timers_to_save = self.ignition_timers.astype(np.int16, copy=False)
+		blazing_timers_to_save = self.blazing_timers.astype(np.int16, copy=False)
+		np.savez_compressed(
+			filepath,
+			grid=grid_to_save,
+			ignition_timers=ignition_timers_to_save,
+			blazing_timers=blazing_timers_to_save,
+			timestep=np.int64(self.timestep),
+		)
+
+	def load_checkpoint(self, filepath: str) -> None:
+		with np.load(filepath, allow_pickle=False) as checkpoint:
+			if (
+				"grid" not in checkpoint
+				or "ignition_timers" not in checkpoint
+				or "blazing_timers" not in checkpoint
+				or "timestep" not in checkpoint
+			):
+				raise KeyError(
+					"Checkpoint must contain 'grid', 'ignition_timers', 'blazing_timers', and 'timestep' arrays"
+				)
+
+			loaded_grid = checkpoint["grid"]
+			loaded_ignition_timers = checkpoint["ignition_timers"]
+			loaded_blazing_timers = checkpoint["blazing_timers"]
+			loaded_timestep = checkpoint["timestep"]
+
+		if loaded_grid.shape != self.grid_shape:
+			raise ValueError(
+				f"Checkpoint grid shape {loaded_grid.shape} does not match expected {self.grid_shape}"
+			)
+		if loaded_grid.dtype != np.int8:
+			raise TypeError(f"Checkpoint grid dtype must be int8, got {loaded_grid.dtype}")
+		if loaded_ignition_timers.shape != self.grid_shape:
+			raise ValueError(
+				"Checkpoint ignition_timers shape "
+				f"{loaded_ignition_timers.shape} does not match expected {self.grid_shape}"
+			)
+		if loaded_blazing_timers.shape != self.grid_shape:
+			raise ValueError(
+				"Checkpoint blazing_timers shape "
+				f"{loaded_blazing_timers.shape} does not match expected {self.grid_shape}"
+			)
+		if loaded_ignition_timers.dtype != np.int16:
+			raise TypeError(
+				"Checkpoint ignition_timers dtype must be int16, "
+				f"got {loaded_ignition_timers.dtype}"
+			)
+		if loaded_blazing_timers.dtype != np.int16:
+			raise TypeError(
+				"Checkpoint blazing_timers dtype must be int16, "
+				f"got {loaded_blazing_timers.dtype}"
+			)
+
+		self.grid = loaded_grid.copy()
+		self.ignition_timers = loaded_ignition_timers.copy()
+		self.blazing_timers = loaded_blazing_timers.copy()
+		self.timestep = int(np.asarray(loaded_timestep).item())
 
 	def _predict_with_model(self) -> np.ndarray:
 		kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.int8)

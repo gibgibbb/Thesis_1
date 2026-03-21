@@ -3,6 +3,7 @@ environment:
   slope_file: "stack_slope_final.tif"
   proximity_file: "stack_proximity.tif"
   buildings_file: "stack_buildings.tif"
+  materials_file: "stack_materials.tif"
   nodata_value: -9999
 
 simulation:
@@ -22,11 +23,12 @@ flammability_weights:
 
 placeholder_transition:
   base_ignition_prob: 0.12
-  slope_weight: 0.35
-  building_weight: 0.25
+  slope_weight: 0.20
+  building_weight: 0.10
   proximity_weight: 0.20
   wind_weight: 0.20
   burnout_prob: 0.04
+  material_weight: 0.35
 
 ml_model:
   enabled: true

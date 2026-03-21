@@ -13,7 +13,7 @@ class EnvironmentManager:
         self.slope_file = config["slope_file"]
         self.proximity_file = config["proximity_file"]
         self.buildings_file = config["buildings_file"]
-        self.materials_file = config.get("materials_file", "stack_materials.tif")
+        self.materials_file = config.get("materials_file", "")
         self.nodata_value = config.get("nodata_value", -9999)
 
         self.transform = None
@@ -113,15 +113,7 @@ class EnvironmentManager:
 
         self.building_presence = np.where(self.buildings_raw == 10, 1, 0).astype(np.int8)
 
-        material_scores = self.config.get("placeholder_transition", {}).get("material_scores", {})
-        concrete_score = float(material_scores.get("concrete_score", material_scores.get("concrete", 0.2)))
-        mixed_score = float(material_scores.get("mixed_score", material_scores.get("mixed", 0.5)))
-        wood_score = float(material_scores.get("wood_score", material_scores.get("wood", 0.9)))
-
-        self.material_risk = np.zeros_like(self.materials_raw, dtype=np.float32)
-        self.material_risk[self.materials_raw == 1] = concrete_score
-        self.material_risk[self.materials_raw == 2] = mixed_score
-        self.material_risk[self.materials_raw == 3] = wood_score
+        self.material_risk = self.materials_raw / 10.0
         self.material_risk[self.nodata_mask] = 0
 
     def get_environment(self) -> dict[str, Any]:

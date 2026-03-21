@@ -52,6 +52,7 @@ class SyntheticDatasetGenerator:
             "slope_risk": env["slope_risk"][row_slice, col_slice],
             "proximity_risk": env["proximity_risk"][row_slice, col_slice],
             "building_presence": env["building_presence"][row_slice, col_slice],
+            "material_risk": env["material_risk"][row_slice, col_slice],
             "burnable_mask": env["burnable_mask"][row_slice, col_slice],
             "nodata_mask": env["nodata_mask"][row_slice, col_slice],
             "transform": env["transform"],
@@ -104,7 +105,11 @@ class SyntheticDatasetGenerator:
             )
             grid_features = self.feature_assembler.assemble_grid_features(blazing_neighbor_count)
 
-            candidate_mask = (grid_before == STATE_NOT_YET_BURNING).ravel()
+            # CRITICAL FIX: Only record cells that have at least 1 blazing neighbor. 
+            # Cells with 0 neighbors have mathematically 0% chance of ignition, so recording them 
+            # introduces 20+ million 'impossible negative' rows that skew disk usage and training.
+            candidate_mask = ((grid_before == STATE_NOT_YET_BURNING) & (blazing_neighbor_count > 0)).ravel()
+            
             automata.step()
             grid_after = automata.get_grid()
 

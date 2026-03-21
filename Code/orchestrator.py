@@ -71,6 +71,7 @@ def _pick_random_ignition_points(automata: FireAutomata, n_points: int = 3) -> l
 
 def run_simulation(config: dict) -> None:
 	config = apply_pipeline_defaults(config)
+	sim_cfg = config.get("simulation", {})
 
 	env_manager = EnvironmentManager(config["environment"])
 	env_manager.load_rasters()
@@ -81,39 +82,67 @@ def run_simulation(config: dict) -> None:
 	# FireAutomata passes flammability_weights into FeatureAssembler during setup.
 	automata = FireAutomata(env_manager.get_environment(), config)
 
-	ml_cfg = config.get("ml_model", {})
-	if ml_cfg.get("enabled") is True and str(ml_cfg.get("model_path", "")).strip() != "":
-		load_model(automata, ml_cfg["model_path"])
-
-	ignition_points = config["simulation"].get("ignition_points", [])
-	if ignition_points:
-		ignition_tuples = [(int(row), int(col)) for row, col in ignition_points]
-	else:
-		ignition_tuples = _pick_random_ignition_points(automata, n_points=3)
-
-	if not ignition_tuples:
-		raise ValueError("No valid ignition points available from config or random building candidates.")
-
-	automata.set_ignition(ignition_tuples)
-	print(f"Ignition points: {ignition_tuples}")
-
-	max_timesteps = int(config["simulation"].get("max_timesteps", 0))
-	for step in range(1, max_timesteps + 1):
-		automata.step()
-
-		if step % 10 == 0:
-			counts = automata.get_state_counts()
-			print(f"Step {step}: {counts}")
-
-		if not automata.is_active():
-			print(f"Simulation stopped early at step {step}: no active fire cells remain.")
-			break
+	model_path = Path("models") / "fire_rf_model.joblib"
+	try:
+		load_model(automata, str(model_path))
+		print(f"Loaded ML model: {model_path}")
+	except FileNotFoundError as exc:
+		print(f"ML model not found. Expected at '{model_path}'. Aborting simulation gracefully.")
+		print(f"Reason: {exc}")
+		return
 
 	output_cfg = config.get("output", {})
 	output_dir = Path(output_cfg.get("output_dir", "output"))
 	if not output_dir.is_absolute():
 		output_dir = Path(__file__).resolve().parent / output_dir
 	output_dir.mkdir(parents=True, exist_ok=True)
+
+	resume_checkpoint_cfg = str(sim_cfg.get("resume_checkpoint", "")).strip()
+	is_resumed = False
+	if resume_checkpoint_cfg:
+		resume_checkpoint_path = Path(resume_checkpoint_cfg)
+		if not resume_checkpoint_path.is_absolute():
+			resume_checkpoint_path = Path(__file__).resolve().parent / resume_checkpoint_path
+		if not resume_checkpoint_path.exists():
+			raise FileNotFoundError(f"Resume checkpoint not found: {resume_checkpoint_path}")
+		automata.load_checkpoint(str(resume_checkpoint_path))
+		is_resumed = True
+		print(f"Resumed simulation from checkpoint: {resume_checkpoint_path}")
+
+	if not is_resumed:
+		ignition_points = sim_cfg.get("ignition_points", [])
+		if ignition_points:
+			ignition_tuples = [(int(row), int(col)) for row, col in ignition_points]
+		else:
+			ignition_tuples = _pick_random_ignition_points(automata, n_points=3)
+
+		if not ignition_tuples:
+			raise ValueError("No valid ignition points available from config or random building candidates.")
+
+		automata.set_ignition(ignition_tuples)
+		print(f"Ignition points: {ignition_tuples}")
+
+	max_timesteps = int(sim_cfg.get("max_timesteps", 0))
+	checkpoint_interval_cfg = sim_cfg.get("checkpoint_interval", 0)
+	checkpoint_interval = int(checkpoint_interval_cfg) if checkpoint_interval_cfg is not None else 0
+	checkpoint_enabled = checkpoint_interval > 0
+
+	start_step = int(automata.timestep) + 1
+	for step in range(start_step, max_timesteps + 1):
+		automata.step()
+
+		if step % 10 == 0:
+			counts = automata.get_state_counts()
+			print(f"Step {step}: {counts}")
+
+		if checkpoint_enabled and (step % checkpoint_interval == 0):
+			checkpoint_path = output_dir / f"checkpoint_step_{step:06d}.npz"
+			automata.save_checkpoint(str(checkpoint_path))
+			print(f"Checkpoint saved: {checkpoint_path}")
+
+		if not automata.is_active():
+			print(f"Simulation stopped early at step {step}: no active fire cells remain.")
+			break
 
 	final_grid = automata.get_grid().astype(np.int8)
 	output_path = output_dir / "final_state.tif"
