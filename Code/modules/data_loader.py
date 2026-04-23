@@ -7,6 +7,8 @@ import rasterio
 
 
 class EnvironmentManager:
+    MATERIAL_CLASS_TO_RISK = np.array([0.0, 0.95, 0.8, 0.48, 0.30, 0.15], dtype=np.float32)
+
     def __init__(self, config: dict):
         self.config = config
         self.raster_dir = Path(config["raster_dir"])
@@ -31,6 +33,7 @@ class EnvironmentManager:
         self.slope_risk = None
         self.proximity_risk = None
         self.building_presence = None
+        self.material_class = None
         self.material_risk = None
 
     def load_rasters(self) -> None:
@@ -113,14 +116,15 @@ class EnvironmentManager:
 
         self.building_presence = np.where(self.buildings_raw == 10, 1, 0).astype(np.int8)
 
-        self.material_risk = self.materials_raw / 10.0
-        self.material_risk[self.nodata_mask] = 0
+        self.material_class = np.where(self.nodata_mask, 0.0, self.materials_raw).astype(np.int8)
+        self.material_risk = self.MATERIAL_CLASS_TO_RISK[self.material_class]
 
     def get_environment(self) -> dict[str, Any]:
         return {
             "slope_risk": self.slope_risk,
             "proximity_risk": self.proximity_risk,
             "building_presence": self.building_presence,
+            "material_class": self.material_class,
             "material_risk": self.material_risk,
             "burnable_mask": self.burnable_mask,
             "nodata_mask": self.nodata_mask,

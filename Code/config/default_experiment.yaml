@@ -9,7 +9,8 @@ environment:
 simulation:
   max_timesteps: 300
   seed: 42
-  ignition_points: []          # list of [row, col] pairs; empty = random
+  ignition_points: 
+    - [606750.2784, 1141691.2699]      # EPSG:32651 [x, y], derived from row=894, col=2730 (3x3m Lapu-Lapu cell center)
   early_stop: true             # stop when no IGNITED or BLAZING cells remain
 
 wind:
@@ -47,4 +48,4 @@ dataset_generation:
     col_end: 3200
   n_ignition_points: 5
   timesteps_to_record: 40
-  output_csv: "dataFiles/synthetic_fire_dataset.csv"
+  output_csv: "dataFiles/revised_dataset_5tier.csv"

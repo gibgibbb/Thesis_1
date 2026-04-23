@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
+from rasterio.transform import rowcol
 import yaml
 
 try:
@@ -69,6 +70,51 @@ def _pick_random_ignition_points(automata: FireAutomata, n_points: int = 3) -> l
 	return [(int(row), int(col)) for row, col in selected_cells]
 
 
+def _convert_geographic_ignition_points(
+	automata: FireAutomata,
+	ignition_points: list,
+) -> list[tuple[int, int]]:
+	rows, cols = automata.grid_shape
+	converted: list[tuple[int, int]] = []
+
+	for point in ignition_points:
+		if not isinstance(point, (list, tuple)) or len(point) != 2:
+			raise ValueError(
+				"Each ignition point must be [x, y] in the raster CRS (EPSG:32651). "
+				f"Received: {point}"
+			)
+
+		x = float(point[0])
+		y = float(point[1])
+
+		# Use rasterio rowcol for deterministic grid indices.
+		row_idx, col_idx = rowcol(automata.transform, x, y, op=np.floor)
+		row = int(row_idx)
+		col = int(col_idx)
+
+		# Cross-check with inverse affine transform to guard conversion drift.
+		col_affine, row_affine = ~automata.transform * (x, y)
+		row_affine_idx = int(np.floor(row_affine))
+		col_affine_idx = int(np.floor(col_affine))
+		if row != row_affine_idx or col != col_affine_idx:
+			raise ValueError(
+				"Ignition coordinate conversion mismatch between rowcol() and inverse affine. "
+				f"Input (x={x:.4f}, y={y:.4f}) -> rowcol=({row}, {col}), "
+				f"inverse_affine=({row_affine_idx}, {col_affine_idx})."
+			)
+
+		if row < 0 or row >= rows or col < 0 or col >= cols:
+			raise ValueError(
+				"Ignition coordinate is outside the Lapu-Lapu matrix extent. "
+				f"Input (x={x:.4f}, y={y:.4f}) maps to (row={row}, col={col}), "
+				f"valid row range is [0, {rows - 1}] and col range is [0, {cols - 1}]."
+			)
+
+		converted.append((row, col))
+
+	return converted
+
+
 def run_simulation(config: dict) -> None:
 	config = apply_pipeline_defaults(config)
 	sim_cfg = config.get("simulation", {})
@@ -112,7 +158,12 @@ def run_simulation(config: dict) -> None:
 	if not is_resumed:
 		ignition_points = sim_cfg.get("ignition_points", [])
 		if ignition_points:
-			ignition_tuples = [(int(row), int(col)) for row, col in ignition_points]
+			try:
+				ignition_tuples = _convert_geographic_ignition_points(automata, ignition_points)
+			except ValueError as exc:
+				print("Invalid ignition point configuration. Aborting simulation gracefully.")
+				print(f"Reason: {exc}")
+				return
 		else:
 			ignition_tuples = _pick_random_ignition_points(automata, n_points=3)
 

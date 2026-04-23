@@ -6,11 +6,17 @@ import numpy as np
 
 
 class FeatureAssembler:
+	VALID_MATERIAL_CLASSES = np.arange(6, dtype=np.int8)
+	# 0: No Building, 1: Pure Lightweight, 2: Lightweight,
+	# 3: Half, 4: Mostly Concrete, 5: Concrete
+	MATERIAL_CLASS_TO_RISK = np.array([0.0, 0.95, 0.8, 0.48, 0.30, 0.15], dtype=np.float32)
+
 	FEATURE_NAMES = [
 		"slope_risk",
 		"proximity_risk",
 		"building_presence",
 		"material_risk",
+		"material_class",
 		"wind_speed",
 		"wind_sin",
 		"wind_cos",
@@ -22,7 +28,36 @@ class FeatureAssembler:
 		self.slope_risk = np.asarray(environment["slope_risk"], dtype=np.float32)
 		self.proximity_risk = np.asarray(environment["proximity_risk"], dtype=np.float32)
 		self.building_presence = np.asarray(environment["building_presence"], dtype=np.float32)
-		self.material_risk = np.asarray(environment["material_risk"], dtype=np.float32)
+
+		if "material_class" not in environment:
+			raise ValueError(
+				"Missing material_class in environment. "
+				"Expected integer classes 0..5 from stack_materials.tif"
+			)
+
+		raw_material = np.asarray(environment["material_class"], dtype=np.float32)
+
+		if not np.all(np.isfinite(raw_material)):
+			raise ValueError("material_class contains non-finite values")
+
+		material_class = np.rint(raw_material).astype(np.int8)
+		is_integer_like = np.isclose(raw_material, material_class.astype(np.float32), atol=1e-6)
+		is_valid_class = np.isin(material_class, self.VALID_MATERIAL_CLASSES)
+		valid_mask = is_integer_like & is_valid_class
+		if not np.all(valid_mask):
+			bad_values = np.unique(raw_material[~valid_mask])
+			preview = ", ".join(f"{float(v):.3f}" for v in bad_values[:10])
+			raise ValueError(
+				"stack_materials.tif must contain only integer classes 0..5. "
+				f"Found invalid values: {preview}"
+			)
+
+		self.material_class = material_class
+		self.material_risk = self.MATERIAL_CLASS_TO_RISK[self.material_class]
+		# Enforce class 0 semantics as empty/no-building regardless of buildings raster.
+		self.building_presence = np.where(self.material_class == 0, 0.0, self.building_presence)
+		self.material_risk = np.where(self.building_presence > 0, self.material_risk, 0.0).astype(np.float32)
+
 		self.burnable_mask = environment["burnable_mask"]
 		self.grid_shape = environment["grid_shape"]
 
@@ -62,6 +97,7 @@ class FeatureAssembler:
 				self.proximity_risk.ravel(),
 				self.building_presence.ravel(),
 				self.material_risk.ravel(),
+				self.material_class.ravel(),
 				wind_speed_col,
 				wind_sin_col,
 				wind_cos_col,

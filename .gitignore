@@ -7,3 +7,5 @@
 *.ipynb_checkpoints/
 *.json
 *.tif
+*.tif.aux.xml
+*.tif.xml
