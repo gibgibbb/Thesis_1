@@ -6,8 +6,10 @@ from pathlib import Path
 from typing import Literal
 
 import joblib
+import numpy as np
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import (
 	confusion_matrix,
 	f1_score,
@@ -17,6 +19,8 @@ from sklearn.metrics import (
 	roc_auc_score,
 )
 from sklearn.model_selection import train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
 
 
 class ModelTrainer:
@@ -70,6 +74,22 @@ class ModelTrainer:
 			}
 			params.update(model_kwargs)
 			model = RandomForestClassifier(**params)
+		elif algorithm_name == "logistic_regression":
+			# LR needs feature scaling (unlike RF), so we wrap it in a Pipeline.
+			# The Pipeline has predict_proba(), satisfying automata_engine.py's contract.
+			# class_weight must be 'balanced' (LR doesn't support 'balanced_subsample').
+			lr_class_weight = "balanced" if "subsample" in class_weight_strategy else class_weight_strategy
+			lr_params = {
+				"max_iter": 1000,
+				"random_state": self.seed,
+				"class_weight": lr_class_weight,
+				"solver": "lbfgs",
+			}
+			lr_params.update(model_kwargs)
+			model = Pipeline([
+				("scaler", StandardScaler()),
+				("lr", LogisticRegression(**lr_params)),
+			])
 		else:
 			raise ValueError(f"Unsupported algorithm: {algorithm}")
 
@@ -94,6 +114,15 @@ class ModelTrainer:
 			max_depth=max_depth,
 		)
 
+	def train_logistic_regression(
+		self,
+		class_weight_strategy: Literal["balanced", "balanced_subsample"] = "balanced",
+	) -> object:
+		return self.train_model(
+			algorithm="logistic_regression",
+			class_weight_strategy=class_weight_strategy,
+		)
+
 	def evaluate(self) -> dict:
 		if self.model is None:
 			raise RuntimeError("No trained model found. Call train_model() first.")
@@ -101,7 +130,6 @@ class ModelTrainer:
 		y_proba = self.model.predict_proba(self.X_test)[:, 1]
 
 		# Find the optimal threshold for F1-score
-		import numpy as np
 		best_f1 = 0.0
 		best_threshold = 0.5
 		for t in np.arange(0.1, 0.9, 0.05):
@@ -149,17 +177,37 @@ class ModelTrainer:
 	def feature_importance_report(self) -> None:
 		if self.model is None:
 			raise RuntimeError("No trained model found. Call train_model() first.")
-		if not hasattr(self.model, "feature_importances_"):
-			raise TypeError("Current model does not expose feature_importances_")
+
+		# RF exposes feature_importances_, LR Pipeline exposes coef_ inside the pipeline
+		if hasattr(self.model, "feature_importances_"):
+			scores = self.model.feature_importances_
+			label = "Importance"
+		elif isinstance(self.model, Pipeline) and hasattr(self.model.named_steps.get("lr", None), "coef_"):
+			scores = np.abs(self.model.named_steps["lr"].coef_[0])
+			label = "Abs Coefficient"
+			# Also print the raw (signed) coefficients for interpretation
+			raw_coefs = self.model.named_steps["lr"].coef_[0]
+			print("LR Coefficients (signed — positive = increases ignition chance):")
+			print(f"{'Feature':<30}{'Coefficient':>12}")
+			signed_pairs = sorted(
+				zip(self.feature_names, raw_coefs),
+				key=lambda pair: abs(pair[1]),
+				reverse=True,
+			)
+			for feature_name, coef in signed_pairs:
+				print(f"{feature_name:<30}{coef:>+12.6f}")
+			print()
+		else:
+			raise TypeError("Current model does not expose feature_importances_ or coef_")
 
 		importance_pairs = sorted(
-			zip(self.feature_names, self.model.feature_importances_),
+			zip(self.feature_names, scores),
 			key=lambda pair: pair[1],
 			reverse=True,
 		)
 
-		print("Feature Importances:")
-		print(f"{'Feature':<30}Importance")
+		print(f"Feature {label}:")
+		print(f"{'Feature':<30}{label}")
 		for feature_name, score in importance_pairs:
 			print(f"{feature_name:<30}{score:.6f}")
 

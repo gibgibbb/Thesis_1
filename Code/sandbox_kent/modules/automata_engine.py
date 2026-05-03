@@ -259,28 +259,14 @@ class FireAutomata:
 
 	def _predict_with_model(self) -> np.ndarray:
 		kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.int8)
-		blazing_now = (self.grid == STATE_BLAZING).astype(np.float32)
-
 		blazing_neighbor_count = convolve(
-			blazing_now.astype(np.int8),
+			(self.grid == STATE_BLAZING).astype(np.int8),
 			kernel,
 			mode="constant",
 			cval=0,
 		)
 
-		# Provide the same directional wind-weighted score the CA uses,
-		# so the ML model sees the same information as the rule-based path.
-		max_kernel_sum = float(self.wind_kernel.sum())
-		wind_weighted_score = convolve(
-			blazing_now,
-			self.wind_kernel,
-			mode="constant",
-			cval=0.0,
-		) / max_kernel_sum
-
-		features = self.feature_assembler.assemble_grid_features(
-			blazing_neighbor_count, wind_weighted_score
-		)
+		features = self.feature_assembler.assemble_grid_features(blazing_neighbor_count)
 		proba = self.model.predict_proba(features)
 		ignition_proba_flat = proba[:, 1]
 		ignition_proba_grid = ignition_proba_flat.reshape(self.grid_shape).astype(np.float32)
