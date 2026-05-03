@@ -128,7 +128,14 @@ def run_simulation(config: dict) -> None:
 	# FireAutomata passes flammability_weights into FeatureAssembler during setup.
 	automata = FireAutomata(env_manager.get_environment(), config)
 
-	model_path = Path("models") / "fire_rf_model.joblib"
+	# Allow YAML to override the default model path so different model variants
+	# (LR, RF, etc.) can be plugged in without renaming files.
+	ml_cfg = config.get("ml_model", {})
+	configured_path = str(ml_cfg.get("model_path", "")).strip()
+	if configured_path:
+		model_path = Path(configured_path)
+	else:
+		model_path = Path("models") / "fire_rf_model.joblib"
 	try:
 		load_model(automata, str(model_path))
 		print(f"Loaded ML model: {model_path}")

@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
+from rasterio.transform import rowcol
 import yaml
 
 try:
@@ -57,6 +58,38 @@ def load_model(automata: FireAutomata, model_path: str) -> None:
 	automata.load_model(str(model_file))
 
 
+def _convert_geographic_ignition_points(
+	automata: FireAutomata,
+	ignition_points: list,
+) -> list[tuple[int, int]]:
+	"""Convert [x, y] coords in raster CRS (EPSG:32651) to (row, col) grid indices.
+
+	Mirrors the behavior of sandbox_kent/orchestrator.py so configs with
+	geographic ignition points work identically across both pipelines.
+	"""
+	rows, cols = automata.grid_shape
+	converted: list[tuple[int, int]] = []
+	for point in ignition_points:
+		if not isinstance(point, (list, tuple)) or len(point) != 2:
+			raise ValueError(
+				"Each ignition point must be [x, y] in the raster CRS (EPSG:32651). "
+				f"Received: {point}"
+			)
+		x = float(point[0])
+		y = float(point[1])
+		row_idx, col_idx = rowcol(automata.transform, x, y, op=np.floor)
+		row = int(row_idx)
+		col = int(col_idx)
+		if row < 0 or row >= rows or col < 0 or col >= cols:
+			raise ValueError(
+				"Ignition coordinate is outside the matrix extent. "
+				f"Input ({x}, {y}) maps to (row={row}, col={col}); "
+				f"valid range row [0, {rows - 1}], col [0, {cols - 1}]."
+			)
+		converted.append((row, col))
+	return converted
+
+
 def _pick_random_ignition_points(automata: FireAutomata, n_points: int = 3) -> list[tuple[int, int]]:
 	candidate_mask = automata.burnable_mask & (automata.building_presence == 1)
 	candidate_cells = np.argwhere(candidate_mask)
@@ -82,7 +115,14 @@ def run_simulation(config: dict) -> None:
 	# FireAutomata passes flammability_weights into FeatureAssembler during setup.
 	automata = FireAutomata(env_manager.get_environment(), config)
 
-	model_path = Path("models") / "fire_rf_model.joblib"
+	# Allow YAML to override the default model path so different model variants
+	# (LR, RF, etc.) can be plugged in without renaming files.
+	ml_cfg = config.get("ml_model", {})
+	configured_path = str(ml_cfg.get("model_path", "")).strip()
+	if configured_path:
+		model_path = Path(configured_path)
+	else:
+		model_path = Path("models") / "fire_rf_model.joblib"
 	try:
 		load_model(automata, str(model_path))
 		print(f"Loaded ML model: {model_path}")
@@ -112,7 +152,22 @@ def run_simulation(config: dict) -> None:
 	if not is_resumed:
 		ignition_points = sim_cfg.get("ignition_points", [])
 		if ignition_points:
-			ignition_tuples = [(int(row), int(col)) for row, col in ignition_points]
+			# Detect schema: float pairs are GPS coords, int pairs are row/col.
+			first = ignition_points[0]
+			is_geographic = (
+				isinstance(first, (list, tuple))
+				and len(first) == 2
+				and (isinstance(first[0], float) or isinstance(first[1], float))
+			)
+			if is_geographic:
+				try:
+					ignition_tuples = _convert_geographic_ignition_points(automata, ignition_points)
+				except ValueError as exc:
+					print("Invalid ignition point configuration. Aborting simulation gracefully.")
+					print(f"Reason: {exc}")
+					return
+			else:
+				ignition_tuples = [(int(row), int(col)) for row, col in ignition_points]
 		else:
 			ignition_tuples = _pick_random_ignition_points(automata, n_points=3)
 

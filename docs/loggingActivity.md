@@ -291,3 +291,63 @@ This conclusively shows:
 - The actual LR ceiling on this task is F1 ≈ 0.165
 
 **For the thesis:** The complete story is an 8-variant systematic investigation that identifies the real bottleneck (feature pipeline fidelity between CA physics and ML input) and validates that the fix improves performance in a way that no amount of tuning or interaction engineering could replicate.
+
+---
+
+### Note on Sitio Santa Maria validation wind config (THESIS LIMITATION)
+
+The simulation wind for Kent's spatial validation against the Sitio Santa Maria, Dec 12 2023 fire was set to a placeholder `(10.0 km/h, 315° NW)` in `config/default_experiment.yaml`. This was NOT matched to the actual weather conditions on the day of the fire — Kent confirmed it was the default config value, not retrieved from PAGASA / NASA POWER / NOAA historical weather records.
+
+**Why this matters:** wind speed and direction strongly affect fire spread shape and extent. Using a representative-but-arbitrary wind config means the simulation is asking "what does fire look like spreading from this ignition point under generic conditions" rather than "did our system reproduce the Dec 12 2023 fire."
+
+**Why we accept it for now:**
+- Matching real weather was confirmed difficult without an external data source
+- Single-incident validation already has limitations (hand-traced ground truth, only one fire)
+- The result still shows whether the system's spread mechanics are plausibly correct
+
+**For the thesis methodology section:**
+- This must be openly disclosed
+- Frame as: "we used a representative wind condition (10 km/h NW, typical for Lapu-Lapu) rather than reconstructing the specific weather at the time of the incident; refining this with historical meteorological data is identified as future work"
+- Acceptable sources for future work: NASA POWER (free, daily wind data), PAGASA archives, NOAA Global Surface Summary
+
+---
+
+### Stage A / Stage B plan (in progress)
+
+Decision: do two stages of spatial validation to isolate the impact of our information gap fix.
+
+- **Stage A:** use Kent's feature schema (10 features incl. `material_class`, no `wind_weighted_score`). Wind fix kept (CA simulation is physics-correct). Train LR, run full simulation, spatially validate against `stack_ground_truth.tif`.
+- **Stage B:** use our feature schema (10 features incl. `wind_weighted_score`, no `material_class`). Same simulation pipeline. Train LR, run, validate.
+
+Stage A vs Stage B isolates the value of `wind_weighted_score` at the spatial validation level, complementing the per-cell evidence we already have.
+
+**Caveat:** Stage A LR is NOT directly comparable to Kent's existing RF F1=0.785, because his RF was trained on the OLD broken-wind dataset. The properly comparable RF number requires him to retrain; until then, we cannot publish an "LR vs RF spatial F1" number, only "LR (ours) vs CA-only baseline" and "LR (Stage A) vs LR (Stage B)".
+
+---
+
+23. Regenerated 200-scenario training data using Kent's modules (sandbox_kent/) with `material_class` integrated. Got 24,922 rows, 1,797 positives (7.21%).
+    - Fixed a `_crop_environment` bug in dataset_generator that wasn't propagating `material_class` from the cropped environment dict.
+
+24. Trained Stage A LR on Kent's 10-feature schema. Per-cell F1=0.165, Recall=0.451, AUC-ROC=0.604. material_class coefficient -0.145 (concrete buildings → less ignition, physically sensible).
+
+25. Ran Stage A simulation on full Lapu-Lapu raster (5489x6896, 38M cells) for 100 timesteps, ignited at Sitio Santa Maria GPS coords. Burned 6,764 cells.
+
+26. **Stage A spatial validation: F1=0.602, Recall=0.915 ✓ (passes 0.80 target), Precision=0.448, AUC-ROC=0.958.**
+
+27. Patched `Code/orchestrator.py` to support geographic ignition coordinates (matching sandbox_kent's behavior) so the same YAML works for both stages.
+
+28. Ran Stage B simulation (our LR with `wind_weighted_score`) on the same setup. Burned 6,785 cells.
+
+29. **Stage B spatial validation: F1=0.607, Recall=0.925 ✓, Precision=0.452, AUC-ROC=0.963.**
+
+30. Generated comparison visualizations:
+    - `Code/sandbox_kent/output/stage_a_comparison.png`
+    - `Code/output/stage_b_comparison.png`
+
+### Stage A vs Stage B: nearly identical spatial results
+
+The information gap fix (`wind_weighted_score`) provided +0.029 F1 on per-cell synthetic evaluation but only +0.005 F1 spatially against the real fire incident. The per-cell gain does NOT translate proportionally to spatial validation.
+
+**This is an honest finding worth flagging in the thesis methodology section:** per-cell evaluation on synthetic data overstates the operational value of feature additions. Spatial validation against real incidents is the more conservative and more useful metric.
+
+**Recall PASSES the primary target (>= 0.80) for both stages**, which per the proposal's metric hierarchy is the criterion that matters most. F1 falls short due to over-prediction (~2x the real burned area), but in fire-warning contexts that's often the safer error mode.

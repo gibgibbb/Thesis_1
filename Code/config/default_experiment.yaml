@@ -7,10 +7,11 @@ environment:
   nodata_value: -9999
 
 simulation:
-  max_timesteps: 300
+  max_timesteps: 100
   seed: 42
-  ignition_points: []          # list of [row, col] pairs; empty = random
-  early_stop: true             # stop when no IGNITED or BLAZING cells remain
+  ignition_points:
+    - [606748.78, 1141695.77]   # Sitio Santa Maria, Dec 12 2023 (per Kent's validation incident)
+  early_stop: true              # stop when no IGNITED or BLAZING cells remain
 
 wind:
   speed_kmh: 10.0              # placeholder static global
@@ -32,7 +33,7 @@ placeholder_transition:
 
 ml_model:
   enabled: true
-  model_path: "models/fire_rf_model.joblib"               # path to .pkl or .joblib when ready
+  model_path: "models/fire_lr_windweighted.joblib"        # Stage B: LR with wind_weighted_score
 
 output:
   output_dir: "output"

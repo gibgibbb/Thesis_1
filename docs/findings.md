@@ -720,3 +720,76 @@ When Kent retrains RF on the new 10-feature data, we predict:
 - The absolute improvement from adding wind_weighted_score should be comparable in magnitude to what LR saw (+0.03 range)
 
 If RF improves similarly, it confirms the hypothesis was correct. If RF improves much more, it further validates that tree-based methods extract more from the feature set. Either way, the result is meaningful.
+
+---
+
+## 2026-05-03: Spatial Validation — Stage A vs Stage B vs CA-only Baseline
+
+### Setup
+Both stages run the full CA + ML simulation against Lapu-Lapu rasters, ignited at Sitio Santa Maria coordinates (606748.78, 1141695.77 in EPSG:32651), with simulation wind 10 km/h NW (representative, NOT matched to actual Dec 12 2023 weather — see methodology limitation note in `loggingActivity.md`). Maximum 100 timesteps. Ground truth: Kent's hand-traced raster `stack_ground_truth.tif` from Google satellite imagery (~90% accuracy per his estimate).
+
+| Stage | Modules | Training data | 10th feature |
+|-------|---------|--------------|--------------|
+| A | Kent's `feature_pipeline.py` + `data_loader.py` | 24,922 rows regenerated with Kent's schema | `material_class` |
+| B | Our `feature_pipeline.py` + `data_loader.py` | 21,079 rows existing dataset | `wind_weighted_score` |
+
+Both use the same wind-fixed CA engine, same 9 base features, same Logistic Regression hyperparameters.
+
+### Results
+
+| Variant | F1 | Recall | Precision | AUC-ROC | Jaccard | TP | FP | FN | Cells predicted |
+|---------|:--:|:------:|:---------:|:-------:|:-------:|:--:|:--:|:--:|:--------------:|
+| CA only (baseline, Kent) | 0.684 | 0.544 | 0.921 | 0.772 | 0.520 | 1,802 | 155 | 1,510 | 1,957 |
+| Kent's RF (broken-wind data) | 0.785 | 0.963 | 0.663 | 0.981 | 0.647 | 3,189 | 1,619 | 123 | 4,808 |
+| **Stage A** (LR + material_class) | **0.602** | **0.915** | 0.448 | 0.958 | 0.430 | 3,032 | 3,732 | 280 | 6,764 |
+| **Stage B** (LR + wind_weighted_score) | **0.607** | **0.925** | 0.452 | 0.963 | 0.436 | 3,064 | 3,721 | 248 | 6,785 |
+
+Recall target (≥ 0.80) per the proposal: **PASSED** by both Stage A and Stage B.
+
+### Stage A vs Stage B Difference
+
+The two stages produced near-identical spatial results:
+
+| Metric | Stage A | Stage B | Δ |
+|--------|:-------:|:-------:|:-:|
+| F1 | 0.602 | 0.607 | +0.005 |
+| Recall | 0.915 | 0.925 | +0.010 |
+| Precision | 0.448 | 0.452 | +0.004 |
+| AUC-ROC | 0.958 | 0.963 | +0.005 |
+
+**The information gap fix (`wind_weighted_score`) gave only +0.005 F1 spatially**, despite giving +22% F1 per-cell on synthetic data.
+
+This is a striking gap between per-cell and spatial validation results. Possible explanations:
+- The benefit of `wind_weighted_score` is concentrated in early-spread timesteps, when the fire is small and directional cues matter most. By the time fire has spread to ~3,000+ cells (the size of the validation fire), the directional info matters less because fire is propagating in many directions simultaneously
+- At the spatial scale, both models converge to "spread fire from ignition to all reachable cells with similar features", with material_class doing similar work to wind_weighted_score in shaping the perimeter
+- The single-incident validation is fragile — different fires under different wind conditions could produce different stage gaps
+
+### Comparison to Baselines
+
+**LR (either stage) vs CA-only:**
+- Recall: 0.92 vs 0.54 (+0.38 — major improvement)
+- F1: 0.60 vs 0.68 (-0.08 — slight degradation due to over-prediction)
+- Precision: 0.45 vs 0.92 (-0.47 — LR predicts ~3.5x more cells)
+
+The ML version catches far more real fire cells (recall ↑) at the cost of over-predicting the burned area (precision ↓). For an early-warning system where missing real fire is worse than over-warning, this tradeoff is favorable per the proposal's recall-primary criterion.
+
+**LR vs Kent's RF:**
+- Direct comparison is NOT fair: Kent's RF was trained on the OLD broken-wind dataset, while both LR stages use the new wind-fixed data
+- Until Kent retrains RF on either Stage A or Stage B data, we cannot publish a fair LR-vs-RF comparison
+- However, on AUC-ROC alone (which is more robust to over-prediction), Stage B (0.963) and Kent's RF (0.981) are within ~2 percentage points
+
+### What This Tells Us
+
+1. **The recall target is met.** Both LR variants pass the proposal's primary target (≥ 0.80) by a wide margin
+2. **F1 is below target (0.80) in all variants.** Achieving F1 ≥ 0.80 likely requires reducing false positives, which means a more selective model — possibly by using a higher decision threshold or by adding precision-favoring constraints
+3. **The information gap fix's spatial impact is small.** The +0.029 per-cell F1 gain from `wind_weighted_score` does NOT translate to a comparable spatial gain. This is honest and worth disclosing in the thesis — per-cell metrics overstate the operational value of the feature
+4. **Stage C (unified 11-feature LR) likely won't help much.** Given Stage A and Stage B are within 0.005 F1 of each other, combining material_class + wind_weighted_score into one 11-feature model would probably also land around F1 ≈ 0.60-0.61 spatially. Worth confirming but unlikely to break F1 ≥ 0.80
+5. **The bigger lever for hitting F1 = 0.80 is precision.** Either the model needs to be more selective (over-predicts ~2x the real fire size) or the validation incident chosen happens to be one where the model naturally over-spreads
+
+### Visualizations
+- `Code/sandbox_kent/output/stage_a_comparison.png` — Stage A: ground truth | predicted | TP/FP/FN difference map
+- `Code/output/stage_b_comparison.png` — Stage B: ground truth | predicted | TP/FP/FN difference map
+
+### Confusion Matrix Read
+
+The validation raster has 37.8M cells. Both stages over-predicted by ~2x but recovered >91% of real fire cells. The dominant error mode is FALSE POSITIVES (3,700+ false fire cells) rather than false negatives (~250). For a fire warning system, this is the safer error.

@@ -214,7 +214,7 @@ In other words, the CA knew which neighbors were burning and weighted them by wi
 
 **Effect:** F1 improved from 0.133 → 0.162 (+22%) on per-cell evaluation, with `wind_weighted_score` becoming the second-strongest predictor (coefficient +0.301) immediately after `proximity_risk` (+0.318). Notably, this single feature contributed more performance improvement than all seven hand-engineered interactions combined (+0.029 vs +0.002).
 
-This finding generalizes beyond LR. Both LR and RF received identical features. The information gap likely limited both models. Whether RF benefits similarly from `wind_weighted_score` is being evaluated [TODO: insert RF comparison once Kent retrains].
+This finding generalizes beyond LR. Both LR and RF received identical features. The information gap likely limited both models. Whether RF benefits similarly from `wind_weighted_score` is being evaluated separately by the RF author (Kent) and is not within the scope of this chapter. However, see §3.6 for an important caveat: the per-cell improvement from `wind_weighted_score` does not translate proportionally to spatial validation, suggesting the gap matters less at the operational scale than at the diagnostic scale.
 
 ### 3.4 Why LR Underperforms Architecturally
 
@@ -229,49 +229,86 @@ Real fire ignition involves multiplicative interactions. A wooden building (high
 
 This is the **representational limitation** of linear models. Adding `wind_weighted_score` was effective because it brought the most important non-linearity into the input directly, rather than asking LR to discover it.
 
-### 3.5 Spatial Validation [TODO: pending Kent's validation script and unified feature alignment]
+### 3.5 Spatial Validation
 
-[Once unified feature set is agreed and both models are retrained, run the following procedure:]
+The simulation was validated against the Sitio Santa Maria, Lapu-Lapu City fire of December 12, 2023. Ground truth was constructed by Kent through manual digitization of the burned area in QGIS using post-fire Google satellite imagery (estimated ~90% spatial accuracy), since the Bureau of Fire Protection did not provide official burned-area polygons for any fire in the dataset.
 
 **Procedure:**
-1. Load Lapu-Lapu rasters and configure ignition point at (606748.78, 1141695.77) — Sitio Santa Maria, Dec 12 2023 fire
-2. Load Simulation-LR (best LR variant on unified feature set)
-3. Run CA simulation for 300 timesteps (or until fire dies out)
-4. Save `final_state.tif`
-5. Compare to ground truth raster `stack_ground_truth.tif` using `validate_simulation.py`
+1. Load Lapu-Lapu rasters (5489 × 6896 grid, EPSG:32651)
+2. Configure ignition point at (606748.78, 1141695.77) — converted from GPS to grid index (892, 2730)
+3. Wind set to a representative 10 km/h NW (NOT matched to actual Dec 12 2023 weather — see §5)
+4. Load Simulation-LR; run CA simulation for 100 timesteps with `early_stop` enabled
+5. Save `final_state.tif` (CA cell states 1–5)
+6. Treat states {3, 4, 5} (Ignited, Blazing, Extinguished) as "fire"; compare against the binary ground truth using `spatial_validation/validate_simulation.py`
 
-**Expected results format:**
+To isolate the value of each ML feature contribution, two LR variants were validated:
+- **Simulation-LR (Stage A):** trained on a feature set including `material_class` (a categorical 0–5 building-material code) but excluding `wind_weighted_score`
+- **Simulation-LR (Stage B):** trained on a feature set including `wind_weighted_score` (the directional fire-pressure score) but excluding `material_class`
 
-| Variant | F1 | Recall | Precision | AUC-ROC | Jaccard |
-|---------|:--:|:------:|:---------:|:-------:|:-------:|
+Both stages use the same 9 base features, the same wind-fixed CA engine, and identical hyperparameters; the only difference is the 10th feature.
+
+**Results:**
+
+| Variant | F1 | Recall (primary) | Precision | AUC-ROC | Jaccard |
+|---------|:--:|:----------------:|:---------:|:-------:|:-------:|
 | CA only (no ML) | 0.684 | 0.544 | 0.921 | 0.772 | 0.520 |
-| Simulation-RF (Kent) | 0.785 | 0.963 | 0.663 | 0.981 | 0.647 |
-| Simulation-LR (this work) | [TODO] | [TODO] | [TODO] | [TODO] | [TODO] |
+| Simulation-RF (Kent, broken-wind training data) | 0.785 | 0.963 | 0.663 | 0.981 | 0.647 |
+| **Simulation-LR Stage A** (material_class) | **0.602** | **0.915** ✓ | 0.448 | 0.958 | 0.430 |
+| **Simulation-LR Stage B** (wind_weighted_score) | **0.607** | **0.925** ✓ | 0.452 | 0.963 | 0.436 |
 
-### 3.6 Comparison with CA-only Baseline
+**Confusion matrices (test cells = 37,852,144 total, 3,312 actual fire cells):**
 
-The CA-only baseline result (F1 = 0.684, Recall = 0.544) demonstrates the contribution of the ML component. Without ML, the simulation correctly identifies only 54% of real fire cells but does so with 92% precision (i.e., the rule-based CA is conservative — when it predicts fire, it is usually correct, but it under-predicts fire extent). Adding RF as the ignition predictor dramatically increases recall (0.544 → 0.963) at the cost of some precision (0.921 → 0.663), net F1 +0.10. This recall improvement is the primary ML contribution per the thesis proposal's metric hierarchy.
+| Stage | TP | FP | FN | TN |
+|-------|:--:|:--:|:--:|:--:|
+| Stage A | 3,032 | 3,732 | 280 | 37,845,100 |
+| Stage B | 3,064 | 3,721 | 248 | 37,845,111 |
 
-[TODO: report Simulation-LR's contribution once measured.]
+Both Simulation-LR variants pass the proposal's primary recall criterion (≥ 0.80). The F1 score falls below the 0.80 target in both stages, driven by over-prediction (the simulation predicts ~6,800 fire cells vs. the actual 3,312, an overestimate of approximately 2×). Per the proposal's recall-prioritized metric hierarchy, missing real fire cells (false negatives) is more costly than over-predicting (false positives), so this error mode is operationally favorable for an early-warning system.
+
+**Limitation on direct LR vs RF comparison:** Kent's reported Simulation-RF F1 = 0.785 was produced with an RF model trained on the original synthetic dataset that predates the wind kernel fix described in §3.1. Both LR stages above use the wind-fixed dataset, which is physically more realistic but a different distribution. Until Simulation-RF is retrained on the wind-fixed data, the LR–RF comparison in this table is **indicative only**. The CA-only baseline, by contrast, is a fair reference for both LR stages because it does not depend on training data.
+
+### 3.6 Stage A vs Stage B — Per-Cell Findings Do Not Fully Translate Spatially
+
+Per-cell evaluation showed the addition of `wind_weighted_score` improved F1 from 0.133 → 0.165 (+22%, see §3.3). Spatially, the same feature change improved F1 only from 0.602 → 0.607 (+0.005, less than 1%):
+
+| Comparison | Per-cell F1 Δ | Spatial F1 Δ |
+|------------|:-------------:|:------------:|
+| Stage A → Stage B | – | +0.005 |
+| 9 features → 10 features (`wind_weighted_score`) | +0.029 | – (proxied by Stage A → Stage B) |
+
+This is an honest finding worth reporting: per-cell metrics on synthetic data overstate the operational value of a feature addition. Possible explanations:
+- The benefit of directional wind information is concentrated in early-spread timesteps when the fire is small and directional pressure is the dominant signal. By the time fire has spread to ~3,000 cells (the size of the validation incident), the directional signal is washed out by simultaneous propagation in many directions
+- Both `material_class` and `wind_weighted_score` provide useful but partially redundant information at the spatial scale; either is sufficient to break the 9-feature ceiling, and adding both would likely produce only marginal improvement
+- The single-incident validation is fragile to specific ignition geometry and weather; different fires may show larger gaps between Stage A and Stage B
+
+For thesis methodology, we recommend reporting both per-cell and spatial metrics with explicit acknowledgment that they measure different things.
+
+### 3.7 Comparison with CA-only Baseline
+
+The CA-only baseline (F1 = 0.684, Recall = 0.544, Precision = 0.921) demonstrates the contribution of the ML component. Without ML, the rule-based CA is conservative — when it predicts fire, it is correct 92% of the time, but it under-predicts fire extent and misses 46% of actual fire cells. Adding LR (Stage B) raises recall from 0.544 to 0.925 (a 70% relative improvement) at the cost of dropping precision from 0.921 to 0.452 (a 51% relative decrease). Net F1 changes from 0.684 to 0.607.
+
+The ML contribution is therefore **a recall-precision rebalance, not a uniform improvement**: the ML model spreads fire to many more cells, catching almost all real fire but at the cost of warning about cells that the real fire did not reach. For a fire-warning operational context where the cost of missing real fire is high (lives, infrastructure), this is the correct direction of trade. For damage estimation, the CA-only baseline may be preferable because of its higher precision.
 
 ---
 
 ## 4. Discussion
 
-### 4.1 Pipeline Fidelity is the Primary Performance Driver
+### 4.1 Pipeline Fidelity Is a Performance Driver — But the Effect Is Scale-Dependent
 
-The strongest finding from this investigation is that **fidelity between simulation physics and ML input features matters more than model architecture or hyperparameter choices for CA-ML hybrid systems**.
+The per-cell findings of this investigation suggested a strong methodological lesson: **fidelity between simulation physics and ML input features is the dominant performance lever** for CA-ML hybrid systems. Concretely:
+- One physics-grounded feature (`wind_weighted_score`) delivered per-cell F1 +0.029
+- 100 hyperparameter trials with cross-validation delivered per-cell F1 +0.002
+- Seven hand-engineered interactions delivered per-cell F1 +0.002
 
-Concretely:
-- One physics-grounded feature (`wind_weighted_score`) delivered F1 +0.029
-- 100 hyperparameter trials with cross-validation delivered F1 +0.002
-- Seven hand-engineered interactions delivered F1 +0.002
+Replacing the missing physics-aligned feature was approximately 14× more impactful than tuning, and 14× more impactful than feature engineering at the per-cell level.
 
-Replacing the missing physics-aligned feature was approximately 14× more impactful than tuning, and 14× more impactful than feature engineering. This suggests a methodological principle:
+**However, the spatial validation in §3.5–§3.6 substantially qualifies this finding:** the same `wind_weighted_score` addition that produced +0.029 F1 per-cell produced only +0.005 F1 against the real fire incident. The two stages — one with `material_class`, one with `wind_weighted_score`, both lacking the other — converged to nearly identical spatial performance.
 
-> **For CA-ML hybrid systems, before tuning the model, audit whether the ML input fully captures the information used by the simulation's internal rules. Information asymmetry between the simulator and the ML model is a hidden performance ceiling.**
+This leads to a more nuanced methodological principle than we initially proposed:
 
-We are not aware of prior CA-ML fire spread literature explicitly raising this issue. We submit it as a contribution of this thesis.
+> **In CA-ML hybrid systems, an information asymmetry between the simulator and the ML model can create a measurable per-cell performance ceiling. However, this ceiling does not always translate to a spatial ceiling against real-world ground truth, particularly for incidents large enough that aggregate spread behavior dominates over single-step directional cues. Researchers should evaluate at both per-cell and spatial scales and report both, rather than relying on per-cell metrics alone to make claims about operational value.**
+
+Per-cell evaluation on synthetic data is a useful diagnostic tool, but spatial validation is the criterion that matters for the use case. We are not aware of prior CA-ML fire spread literature reporting this disparity between scales; we submit this dual-scale evaluation methodology as a contribution of this thesis.
 
 ### 4.2 LR's Linear Architecture is the Final Ceiling
 
@@ -293,7 +330,9 @@ The proposal's recall-primary criterion still pushes us toward RF, which achieve
 
 2. **Manually digitized ground truth:** the validation ground truth was constructed by tracing the burned area in QGIS using post-fire Google satellite imagery, since the Bureau of Fire Protection did not provide official burned area polygons. This introduces approximately ±10% spatial uncertainty in the validation metric.
 
-3. **Single-incident validation:** at the time of writing, validation has been performed against one historical fire (Sitio Santa Maria, December 12, 2023). Validating against multiple incidents would strengthen the generalization claim. [TODO: revise once Kent completes additional incidents.]
+3. **Single-incident validation:** at the time of writing, validation has been performed against one historical fire (Sitio Santa Maria, December 12, 2023). Validating against multiple incidents is required to demonstrate generalization; this is identified as ongoing work that depends on additional ground-truth construction by the RF author (Kent), as BFP-supplied burned-area polygons are unavailable.
+
+4. **Wind not matched to actual weather:** the simulation used a representative wind condition (10 km/h NW) rather than the meteorological conditions actually present on December 12, 2023. Wind speed and direction strongly affect fire spread shape and extent, so this represents a substantive methodological limitation. Future work should reconstruct the actual weather using historical archives such as NASA POWER, PAGASA, or NOAA Global Surface Summary, and re-run the validation under those conditions.
 
 4. **Wind not matched to historical weather:** the simulation used a representative wind condition (10 km/h NW) rather than the actual weather conditions on the day of the validation incident. Historical wind data from sources such as NASA POWER or PAGASA could be incorporated as future work.
 
@@ -311,7 +350,7 @@ This thesis chapter evaluated Logistic Regression as the ignition probability es
 
 2. **Characterized the LR ceiling** through systematic hyperparameter optimization (Optuna, 100 trials, 5-fold CV) and physics-informed feature engineering (seven interaction terms). Neither intervention meaningfully exceeded the F1 ≈ 0.165 plateau, demonstrating that the limitation is architectural, not procedural.
 
-3. **Validated the simulation–LR system** spatially against a real fire incident [TODO: insert numbers]. The result is compared against a CA-only baseline (F1 = 0.684) and Simulation-RF (F1 = 0.785) to quantify each component's contribution.
+3. **Validated the simulation–LR system** spatially against the Sitio Santa Maria, Dec 12 2023 fire incident in Lapu-Lapu City. Stage A (LR + material_class) achieved Recall = 0.915 and F1 = 0.602; Stage B (LR + wind_weighted_score) achieved Recall = 0.925 and F1 = 0.607. Both pass the proposal's primary recall target (≥ 0.80). F1 falls below the 0.80 secondary target due to ~2× over-prediction of burn area, an error mode that is operationally favorable for early warning but trades against precision.
 
 The primary contribution of this chapter is methodological: **for CA-ML hybrid simulation systems, the fidelity between simulation physics and ML input features is the dominant performance lever**, exceeding the impact of hyperparameter optimization or feature engineering by an order of magnitude. We submit this as a generalizable principle for future CA-ML hybrid work.
 

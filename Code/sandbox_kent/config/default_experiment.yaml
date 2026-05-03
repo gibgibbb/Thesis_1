@@ -7,7 +7,7 @@ environment:
   nodata_value: -9999
 
 simulation:
-  max_timesteps: 5
+  max_timesteps: 100
   seed: 42
   ignition_points:
     - [606748.78, 1141695.77]    # Sitio Santa Maria, Dec 12 2023 (per Kent)
@@ -33,7 +33,7 @@ placeholder_transition:
 
 ml_model:
   enabled: true
-  model_path: "models/dummy_lr_kent_features.joblib"
+  model_path: "models/fire_lr_stage_a.joblib"   # Stage A: LR trained on Kent's 10 features (incl. material_class)
 
 output:
   output_dir: "output"

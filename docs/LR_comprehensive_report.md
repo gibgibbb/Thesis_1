@@ -281,4 +281,53 @@ The progression narrative:
 
 5. **Engineered physics-informed features** — Added 7 interaction terms grounded in fire literature. Result: F1 = 0.135. The ceiling is not a feature representation problem that 2-way interactions can solve.
 
-6. **Conclusion:** Logistic Regression's linear architecture is fundamentally insufficient for CA-based fire spread prediction. The ignition process depends on higher-order nonlinear interactions that LR cannot represent. This motivates tree-based approaches (RF) that capture interactions through recursive splits.
+6. **Conclusion (updated, May 3 2026):** The per-cell findings suggested LR's linear architecture was insufficient. However, the subsequent information-gap fix and spatial validation substantially revised this conclusion — see Section 10 below.
+
+---
+
+## 10. Spatial Validation — May 3, 2026 Update
+
+After the diagnostic per-cell investigation, we conducted spatial validation against the Sitio Santa Maria, Lapu-Lapu City fire of December 12, 2023, using the partner-supplied ground truth raster (manually digitized from Google satellite imagery; BFP-supplied burned-area polygons unavailable).
+
+### 10.1 Methodology
+- Both LR variants run through the full CA + ML simulation
+- Ignition point: GPS coords (606748.78, 1141695.77) → grid (892, 2730)
+- Wind: 10 km/h NW, NOT matched to actual Dec 12 2023 weather (acknowledged limitation)
+- 100 timesteps, early-stop enabled
+- Comparison metric: cells in CA states {3, 4, 5} treated as "fire" predictions; compared against binary ground truth using `validate_simulation.py`
+
+### 10.2 Two-Stage Comparison
+
+To isolate the effect of each candidate 10th feature:
+
+| Variant | 10th feature | F1 | Recall | Precision | AUC-ROC |
+|---------|--------------|:--:|:------:|:---------:|:-------:|
+| CA only (baseline, partner-reported) | — | 0.684 | 0.544 | 0.921 | 0.772 |
+| Simulation-RF (partner, broken-wind training data) | material_class | 0.785 | 0.963 | 0.663 | 0.981 |
+| **Simulation-LR Stage A** | material_class | **0.602** | **0.915** ✓ | 0.448 | 0.958 |
+| **Simulation-LR Stage B** | wind_weighted_score | **0.607** | **0.925** ✓ | 0.452 | 0.963 |
+
+Both LR variants pass the proposal's primary recall target (≥ 0.80). F1 falls below the secondary 0.80 target due to ~2× over-prediction of burn area.
+
+### 10.3 Key Spatial Findings
+
+1. **Recall target met by both stages.** The proposal designates recall as the primary metric; Stage A and Stage B both clear it by a wide margin
+2. **Per-cell F1 gain does not translate proportionally to spatial F1.** `wind_weighted_score` improved per-cell F1 by +0.029 but spatial F1 by only +0.005
+3. **Stage A ≈ Stage B spatially.** `material_class` and `wind_weighted_score` produce nearly identical spatial outcomes when each is added to the 9 base features
+4. **The "architectural ceiling" argument from §3.4 needs softening.** Per-cell F1 ≈ 0.165 looked like a hard limit, but spatial F1 = 0.61 with all features available — the model is functioning well enough to catch >91% of real fire cells. The "ceiling" was largely a per-cell artifact
+
+### 10.4 LR vs RF — Direct Comparison Not Yet Available
+
+The reported partner RF result (F1 = 0.785) was produced on the original synthetic dataset that predates the wind-kernel fix. Both LR stages above use the wind-fixed dataset. Until the partner retrains RF on Stage A or Stage B data, the LR vs RF comparison is **indicative only**.
+
+### 10.5 Visualizations
+- `Code/sandbox_kent/output/stage_a_comparison.png`
+- `Code/output/stage_b_comparison.png`
+
+### 10.6 Revised Framing for the Thesis
+
+The per-cell investigation chapter remains intact. What changes is the framing of the contribution:
+- Before: "We discovered an information gap that broke the LR ceiling"
+- After: "We discovered an information gap that **substantially improves per-cell prediction but only marginally improves spatial prediction**, demonstrating that per-cell and spatial metrics measure different things and should be reported jointly"
+
+This dual-scale evaluation methodology is itself a methodological contribution. Many CA-ML papers report only per-cell metrics; the spatial divergence here suggests this overstates operational value.
