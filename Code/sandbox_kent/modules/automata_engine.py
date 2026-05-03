@@ -259,17 +259,44 @@ class FireAutomata:
 
 	def _predict_with_model(self) -> np.ndarray:
 		kernel = np.array([[1, 1, 1], [1, 0, 1], [1, 1, 1]], dtype=np.int8)
+		blazing_now = (self.grid == STATE_BLAZING).astype(np.float32)
+
 		blazing_neighbor_count = convolve(
-			(self.grid == STATE_BLAZING).astype(np.int8),
+			blazing_now.astype(np.int8),
 			kernel,
 			mode="constant",
 			cval=0,
 		)
 
-		features = self.feature_assembler.assemble_grid_features(blazing_neighbor_count)
+		# Provide the same directional wind-weighted score the CA uses,
+		# so the ML model sees the same information as the rule-based path.
+		max_kernel_sum = float(self.wind_kernel.sum())
+		wind_weighted_score = convolve(
+			blazing_now,
+			self.wind_kernel,
+			mode="constant",
+			cval=0.0,
+		) / max_kernel_sum
+
+		features = self.feature_assembler.assemble_grid_features(
+			blazing_neighbor_count, wind_weighted_score
+		)
 		proba = self.model.predict_proba(features)
 		ignition_proba_flat = proba[:, 1]
 		ignition_proba_grid = ignition_proba_flat.reshape(self.grid_shape).astype(np.float32)
+
+		# Optional inference-time threshold: zero out probabilities below the
+		# configured cutoff. This makes the simulation more selective and
+		# trades recall for precision; useful for spatial validation where
+		# the default-threshold model over-predicts burn area.
+		# Configured via YAML key `ml_model.proba_threshold`. 0.0 = no effect.
+		proba_threshold = float(self.ml_cfg.get("proba_threshold", 0.0))
+		if proba_threshold > 0.0:
+			ignition_proba_grid = np.where(
+				ignition_proba_grid >= proba_threshold,
+				ignition_proba_grid,
+				np.float32(0.0),
+			)
 		return ignition_proba_grid
 
 	def is_active(self) -> bool:

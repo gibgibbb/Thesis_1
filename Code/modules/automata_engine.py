@@ -284,6 +284,19 @@ class FireAutomata:
 		proba = self.model.predict_proba(features)
 		ignition_proba_flat = proba[:, 1]
 		ignition_proba_grid = ignition_proba_flat.reshape(self.grid_shape).astype(np.float32)
+
+		# Optional inference-time threshold: zero out probabilities below the
+		# configured cutoff. This makes the simulation more selective and
+		# trades recall for precision; useful for spatial validation where
+		# the default-threshold model over-predicts burn area.
+		# Configured via YAML key `ml_model.proba_threshold`. 0.0 = no effect.
+		proba_threshold = float(self.ml_cfg.get("proba_threshold", 0.0))
+		if proba_threshold > 0.0:
+			ignition_proba_grid = np.where(
+				ignition_proba_grid >= proba_threshold,
+				ignition_proba_grid,
+				np.float32(0.0),
+			)
 		return ignition_proba_grid
 
 	def is_active(self) -> bool:

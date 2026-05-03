@@ -380,16 +380,18 @@ The primary contribution of this chapter is methodological: **for CA-ML hybrid s
 
 ## Appendix B: References (Verify on Google Scholar before submission)
 
+All citations verified May 3 2026 except where noted.
+
 | Citation | Purpose |
 |----------|---------|
-| Alexandridis, A., Vakalis, D., Siettos, C. I., & Bafas, G. V. (2011). | Wind/slope modulation of CA fire spread probability |
-| Gao, B. C., et al. (2008). | Wind velocity and direction in CA fire models |
-| Hastie, T., Tibshirani, R., & Friedman, J. (2009). *The Elements of Statistical Learning*. Springer. | Bias-variance tradeoff, model assessment (Ch. 7) |
-| Kohavi, R. (1995). A study of cross-validation and bootstrap for accuracy estimation and model selection. *IJCAI*. | Stratified k-fold CV methodology |
-| Stone, M. (1974). Cross-validatory choice and assessment of statistical predictions. *J. Royal Stat. Soc. B*. | Foundational CV theory |
-| Bergstra, J., & Bengio, Y. (2012). Random search for hyper-parameter optimization. *JMLR*. | Justification for systematic over manual hyperparameter search |
-| Akiba, T., Sano, S., Yanase, T., Ohta, T., & Koyama, M. (2019). Optuna: a next-generation hyperparameter optimization framework. *KDD*. | Optuna tool citation |
-| Geman, S., Bienenstock, E., & Doursat, R. (1992). Neural networks and the bias/variance dilemma. *Neural Computation*. | Theoretical grounding for hyperparameter regularization |
+| Alexandridis, A., Vakalis, D., Siettos, C. I., & Bafas, G. V. (2011). Wildland fire spread modelling using cellular automata: evolution in large-scale spatially heterogeneous environments under fire suppression tactics. *International Journal of Wildland Fire*, 20(5), 633–647. | Wind/slope modulation of CA fire spread probability |
+| **[VERIFY]** Gao 2008 — original draft citation for wind in CA fire models was not findable on Google Scholar. Replace with a verifiable equivalent or confirm exact authors/title with the partner before submission. Candidate replacements: Karafyllidis & Thanailakis (1997), or Yassemi, Dragićević & Schmidt (2008) "Design and implementation of an integrated GIS-based cellular automata model to characterize forest fire behaviour." | Wind velocity and direction in CA fire models |
+| Hastie, T., Tibshirani, R., & Friedman, J. (2009). *The Elements of Statistical Learning: Data Mining, Inference, and Prediction* (2nd ed.). Springer. ISBN 978-0-387-84857-0. | Bias-variance tradeoff, model assessment (Ch. 7) |
+| Kohavi, R. (1995). A study of cross-validation and bootstrap for accuracy estimation and model selection. In *Proceedings of the 14th International Joint Conference on Artificial Intelligence (IJCAI'95)*, Vol. 2, pp. 1137–1143. | Stratified k-fold CV methodology |
+| Stone, M. (1974). Cross-validatory choice and assessment of statistical predictions. *Journal of the Royal Statistical Society Series B (Methodological)*, 36(2), 111–133. DOI: 10.1111/j.2517-6161.1974.tb00994.x. | Foundational CV theory |
+| Bergstra, J., & Bengio, Y. (2012). Random search for hyper-parameter optimization. *Journal of Machine Learning Research*, 13(10), 281–305. | Justification for systematic over manual hyperparameter search |
+| Akiba, T., Sano, S., Yanase, T., Ohta, T., & Koyama, M. (2019). Optuna: a next-generation hyperparameter optimization framework. In *Proceedings of the 25th ACM SIGKDD International Conference on Knowledge Discovery & Data Mining (KDD '19)*, pp. 2623–2631. DOI: 10.1145/3292500.3330701. | Optuna tool citation (TPE sampler) |
+| Geman, S., Bienenstock, E., & Doursat, R. (1992). Neural networks and the bias/variance dilemma. *Neural Computation*, 4(1), 1–58. DOI: 10.1162/neco.1992.4.1.1. | Theoretical grounding for hyperparameter regularization |
 
 ---
 

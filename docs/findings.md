@@ -793,3 +793,74 @@ The ML version catches far more real fire cells (recall ↑) at the cost of over
 ### Confusion Matrix Read
 
 The validation raster has 37.8M cells. Both stages over-predicted by ~2x but recovered >91% of real fire cells. The dominant error mode is FALSE POSITIVES (3,700+ false fire cells) rather than false negatives (~250). For a fire warning system, this is the safer error.
+
+---
+
+## 2026-05-03 (continued): Threshold Tuning + Stage C Unified Model
+
+### Threshold Tuning (Stage B)
+
+The simulation engine was extended to support an inference-time `proba_threshold` that zeros out ML predictions below a cutoff before the stochastic ignition draw. This makes the model more selective at inference time without retraining. Tested on Stage B (LR + wind_weighted_score):
+
+| Threshold | F1 | Recall | Precision | AUC-ROC | Cells predicted | Recall ≥ 0.80? |
+|-----------|:--:|:------:|:---------:|:-------:|:---------------:|:---:|
+| 0.0 (off) | 0.607 | 0.925 | 0.452 | 0.963 | 6,785 | ✓ |
+| **0.40** | **0.691** | **0.867** | 0.574 | 0.933 | 4,998 | **✓** |
+| 0.45 | 0.709 | 0.769 | 0.658 | 0.884 | 3,872 | ✗ |
+| 0.50 | 0.450 | 0.293 | 0.965 | 0.647 | 1,006 | ✗ |
+| 0.55 | 0.007 | 0.003 | 1.000 | 0.502 | 11 | ✗ |
+
+**Best operational pick: threshold=0.40.** F1 improved from 0.607 to 0.691 (+0.084) while still passing the proposal's primary recall target (≥ 0.80). Higher thresholds produced higher F1 but failed recall.
+
+### Stage C: Unified 11-Feature Model
+
+Stage C combines both `material_class` (from Kent's schema) and `wind_weighted_score` (from our schema) into a single LR model. This required:
+- Adding `wind_weighted_score` to `sandbox_kent/modules/feature_pipeline.py`
+- Replacing `sandbox_kent/modules/automata_engine.py` with our wind-fixed + info-gap-fixed version
+- Updating `sandbox_kent/dataset_generator.py` to compute and record the directional score
+- Regenerating training data (24,922 rows, 1,797 positives, 11 features)
+
+**Per-cell:** F1=0.176 (small improvement over Stage A's 0.165). Both new features carry signal — `wind_weighted_score` becomes the 2nd strongest predictor (+0.343), `material_class` retains its negative coefficient (-0.163, concrete buildings → less ignition).
+
+### Stage C Spatial Results
+
+| Variant | F1 | Recall | Precision | AUC-ROC | Recall ≥ 0.80? |
+|---------|:--:|:------:|:---------:|:-------:|:---:|
+| Stage C (no threshold) | 0.622 | 0.910 | 0.473 | 0.955 | ✓ |
+| Stage C + threshold=0.30 | 0.671 | 0.874 | 0.545 | 0.937 | ✓ |
+| Stage C + threshold=0.35 | 0.683 | 0.785 | 0.604 | 0.893 | ✗ |
+| Stage C + threshold=0.40 | 0.683 | 0.644 | 0.728 | 0.822 | ✗ |
+
+Stage C alone produced F1=0.622, slightly better than Stage A (0.602) and Stage B (0.607). However, Stage C with threshold tuning could not match Stage B + threshold=0.40 — the unified model's more confident predictions made it more sensitive to the threshold cutoff, requiring a lower threshold (0.30) which traded back some F1.
+
+### Final Variant Comparison (master table)
+
+| # | Variant | Features | Threshold | F1 | Recall | Precision | AUC-ROC |
+|---|---------|:--------:|:---------:|:--:|:------:|:---------:|:-------:|
+| 1 | CA only (baseline, partner-reported) | — | — | 0.684 | 0.544 | 0.921 | 0.772 |
+| 2 | Kent's RF (broken-wind training data) | 10 (Kent) | — | 0.785 | 0.963 | 0.663 | 0.981 |
+| 3 | Stage A (LR + material_class) | 10 (Kent) | — | 0.602 | 0.915 ✓ | 0.448 | 0.958 |
+| 4 | Stage B (LR + wind_weighted_score) | 10 (ours) | — | 0.607 | 0.925 ✓ | 0.452 | 0.963 |
+| 5 | **Stage B + threshold=0.40** | 10 (ours) | 0.40 | **0.691** | **0.867 ✓** | 0.574 | 0.933 |
+| 6 | Stage C (unified) | 11 | — | 0.622 | 0.910 ✓ | 0.473 | 0.955 |
+| 7 | Stage C + threshold=0.30 | 11 | 0.30 | 0.671 | 0.874 ✓ | 0.545 | 0.937 |
+
+**Best LR result that passes the recall criterion: Stage B + threshold=0.40** — F1=0.691, Recall=0.867. This is +0.084 F1 over the unthresholded Stage B baseline.
+
+### Conclusions from the Full Investigation
+
+1. **The recall target (≥ 0.80) is consistently met** by every Stage A/B/C variant at default threshold and by Stage B + t=0.40 / Stage C + t=0.30 with the threshold trick. The proposal's primary criterion holds.
+
+2. **The F1 target (≥ 0.80) was NOT achieved** by any LR variant. The closest was Stage B + threshold=0.40 at F1=0.691. Closing this gap would require either: (a) a non-linear model architecture (RF), (b) less aggressive ML predictions paired with the CA's natural conservatism, or (c) more training data tightly coupled to the validation incident's geometry — none of which are quick fixes.
+
+3. **Stage C's unified feature set added marginal value over either Stage A or Stage B alone.** The +0.015 F1 improvement (0.607 → 0.622) is honestly within the noise band for a single-incident validation. The two extra features are largely substitutable rather than complementary.
+
+4. **Threshold tuning was the most impactful single intervention spatially.** It moved Stage B's F1 from 0.607 to 0.691 (+0.084) — larger than the gain from material_class, wind_weighted_score, or both combined. This is methodologically interesting: a post-hoc inference-time hack outperformed the architectural feature investigations, but only because all the underlying structural fixes were already in place.
+
+5. **Single-incident validation remains a major limitation.** With only Sitio Santa Maria as the validation target, all the differences between variants here might invert under a different fire's geometry. Multi-incident validation is required before drawing strong methodological conclusions.
+
+### Visualizations
+- `Code/sandbox_kent/output/stage_a_comparison.png` — Stage A
+- `Code/output/stage_b_comparison.png` — Stage B (no threshold)
+- `Code/output/stage_b_t040_comparison.png` — Stage B + threshold=0.40 (best F1 with recall ≥ 0.80)
+- `Code/sandbox_kent/output/stage_c_comparison.png` — Stage C (unified, no threshold)

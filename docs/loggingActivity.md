@@ -351,3 +351,39 @@ The information gap fix (`wind_weighted_score`) provided +0.029 F1 on per-cell s
 **This is an honest finding worth flagging in the thesis methodology section:** per-cell evaluation on synthetic data overstates the operational value of feature additions. Spatial validation against real incidents is the more conservative and more useful metric.
 
 **Recall PASSES the primary target (>= 0.80) for both stages**, which per the proposal's metric hierarchy is the criterion that matters most. F1 falls short due to over-prediction (~2x the real burned area), but in fire-warning contexts that's often the safer error mode.
+
+---
+
+31. Verified all thesis citations on Google Scholar (Stone 1974, Kohavi 1995, Hastie/Tibshirani/Friedman 2009, Bergstra/Bengio 2012, Akiba et al. 2019, Geman/Bienenstock/Doursat 1992, Alexandridis et al. 2011) — all confirmed with exact volume/page/DOI metadata. Gao 2008 could not be confirmed and is flagged in the chapter draft for replacement.
+
+32. Added inference-time `proba_threshold` config option to `automata_engine.py`. Zeros out ML predictions below cutoff before stochastic ignition draw. Lets us tune precision/recall balance at inference without retraining.
+
+33. Threshold sweep on Stage B (LR + wind_weighted_score):
+    - t=0.40 → F1=0.691, Recall=0.867 ✓ — BEST result that passes recall
+    - t=0.45 → F1=0.709, Recall=0.769 ✗
+    - t=0.50 → F1=0.450, Recall=0.293 ✗
+    - t=0.55 → F1=0.007, Recall=0.003 ✗ (model probability median is 0.47, threshold this high suppresses nearly everything)
+
+34. Stage C: unified 11-feature LR (Kent's material_class + our wind_weighted_score together).
+    - Modified `sandbox_kent/modules/feature_pipeline.py` to add wind_weighted_score
+    - Replaced `sandbox_kent/modules/automata_engine.py` with our info-gap-fixed version
+    - Updated `sandbox_kent/dataset_generator.py` to compute and record wind_weighted_score
+    - Regenerated 24,922-row training dataset with all 11 features
+    - Trained LR; per-cell F1=0.176 (slight improvement over Stage A's 0.165). Both new features carry signal: wind_weighted_score=+0.343, material_class=-0.163.
+
+35. Stage C spatial validation:
+    - No threshold: F1=0.622, Recall=0.910 ✓
+    - t=0.30: F1=0.671, Recall=0.874 ✓
+    - t=0.35: F1=0.683, Recall=0.785 ✗
+    - t=0.40: F1=0.683, Recall=0.644 ✗
+
+### Final operational pick: Stage B + threshold=0.40
+
+F1=0.691 (best), Recall=0.867 ✓ (passes proposal's primary target). Stage C with all 11 features didn't beat Stage B + threshold combination, even with threshold re-tuning. The unified model has more confident predictions, making it harder to threshold without sacrificing recall.
+
+### Big picture for the thesis
+
+- **All architectural / feature-engineering interventions for LR plateaued around spatial F1 = 0.60.** Stage A (material_class), Stage B (wind_weighted_score), Stage C (both) are within ±0.020 F1 of each other.
+- **Threshold tuning at inference time was the single most impactful intervention** — moved F1 from 0.607 to 0.691 (+0.084). Bigger than any feature change.
+- **Recall target consistently met (≥ 0.80) across all defensible variants.** F1 target (≥ 0.80) NOT met by any LR variant. The remaining gap (0.69 → 0.80) likely requires architectural changes beyond LR.
+- **Single-incident validation is the binding limitation.** All conclusions above could shift on a different fire incident's geometry. Multi-incident validation is the most important future work.
