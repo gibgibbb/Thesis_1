@@ -196,7 +196,8 @@ def run_simulation(config: dict) -> None:
 			break
 
 	final_grid = automata.get_grid().astype(np.int8)
-	output_path = output_dir / "final_state.tif"
+	# output_path = output_dir / "final_state.tif"
+	output_path = output_dir / "final_state_sitio_million_flower.tif"
 	with rasterio.open(
 		output_path,
 		"w",

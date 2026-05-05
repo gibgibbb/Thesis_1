@@ -10,7 +10,9 @@ simulation:
   max_timesteps: 300
   seed: 42
   ignition_points: 
-    - [606750.2784, 1141691.2699]      # EPSG:32651 [x, y], derived from row=894, col=2730 (3x3m Lapu-Lapu cell center)
+    # - [606750.2784, 1141691.2699]      # Sitio Santa MariaEPSG:32651 [x, y], derived from row=894, col=2730 (3x3m Lapu-Lapu cell center)
+    - [603546.2784, 1139654.2699]      # Sitio Million Flower EPSG:32651 [x, y], derived from row=1573, col=1662 for the Sitio Million Flower incident
+
   early_stop: true             # stop when no IGNITED or BLAZING cells remain
 
 wind:

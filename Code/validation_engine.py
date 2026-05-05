@@ -95,10 +95,12 @@ def evaluate_final_state_against_ground_truth(
 def run_default_validation() -> dict:
 	"""Run validation using repository default raster paths."""
 	code_dir = Path(__file__).resolve().parent
-	final_state_path = code_dir / "output" / "final_state.tif"
+	# final_state_path = code_dir / "output" / "final_state.tif"
 	# For baseline validation, we compare against the "final_state_baseline.tif" which is generated using the same parameters as the "stack_ground_truth.tif" to ensure a fair comparison.
 	# final_state_path = code_dir / "output" / "final_state_baseline.tif"
-	ground_truth_path = code_dir / "processedData" / "raster" / "raster" / "stack_ground_truth.tif"
+	final_state_path = code_dir / "output" / "final_state_sitio_million_flower.tif"
+	ground_truth_path = code_dir / "processedData" / "raster" / "raster" / "stack_ground_truth_2.tif"
+	# ground_truth_path = code_dir / "processedData" / "raster" / "raster" / "stack_ground_truth.tif"
 
 	metrics = evaluate_final_state_against_ground_truth(
 		final_state_path=str(final_state_path),
